@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Streamlit secrets (NUNCA versionar)
+.streamlit/secrets.toml
+postgres_string/
+relatorios_csv/
+postgres_string/postgress_string.rtf
+
+# OS
+.DS_Store
