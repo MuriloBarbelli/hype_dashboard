@@ -18,3 +18,19 @@ def fetch_df(sql: str, params=None):
     with conn.cursor() as cur:
         cur.execute(sql, params or {})
         return cur.fetchall()
+
+@st.cache_data(ttl=60)
+def fetch_distinct_values(column: str):
+    # proteção simples pra evitar SQL injection por nome de coluna
+    allowed = {"event_type_code", "access_name", "unit_group", "unit", "user_name", "user_profile"}
+    if column not in allowed:
+        raise ValueError(f"Coluna não permitida: {column}")
+
+    sql = f"""
+    select distinct {column} as value
+    from public.events
+    where {column} is not null
+    order by 1;
+    """
+    rows = fetch_df(sql)
+    return [r["value"] for r in rows]

@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, time
 
 from src.ingest import normalize_kiper_csv, insert_events
-from src.db import fetch_df
+from src.db import fetch_df, fetch_distinct_values
 
 st.set_page_config(page_title="Hype – Eventos", layout="wide")
 st.title("Hype – Eventos (Kiper)")
@@ -45,46 +45,122 @@ st.divider()
 # ----------------------------
 # B) Filtro por data/hora (consulta no banco)
 # ----------------------------
-st.header("2) Explorar eventos (filtro por período)")
+st.header("Relatórios • Eventos")
 
-col1, col2, col3, col4 = st.columns(4)
+# ----------------------------
+# Sidebar: filtros
+# ----------------------------
+st.sidebar.header("Filtros")
 
-with col1:
-    start_date = st.date_input("Data início", value=None)
-with col2:
-    start_time = st.time_input("Hora início", value=time(0, 0))
-with col3:
-    end_date = st.date_input("Data fim", value=None)
-with col4:
-    end_time = st.time_input("Hora fim", value=time(23, 59))
+# --- período ---
+start_date = st.sidebar.date_input("Período inicial (data)")
+start_time = st.sidebar.time_input("Hora inicial", value=time(0, 0))
+end_date = st.sidebar.date_input("Período final (data)")
+end_time = st.sidebar.time_input("Hora final", value=time(23, 59))
 
-limit = st.slider("Limite de linhas", 50, 5000, 500, step=50)
+start_dt = datetime.combine(start_date, start_time)
+end_dt = datetime.combine(end_date, end_time)
 
-if start_date and end_date:
-    start_dt = datetime.combine(start_date, start_time)
-    end_dt = datetime.combine(end_date, end_time)
 
-    sql = """
-    SELECT
-      event_timestamp,
-      access_name,
-      event_description,
-      user_name,
-      user_profile,
-      unit_group,
-      unit,
-      treatment,
-      source_file
-    FROM public.events
-    WHERE event_timestamp BETWEEN %(start)s AND %(end)s
-    ORDER BY event_timestamp DESC
-    LIMIT %(limit)s;
-    """
+# --- filtros ---
+event_types = st.sidebar.multiselect(
+    "Eventos (opcional)",
+    fetch_distinct_values("event_type_code")
+)
 
-    rows = fetch_df(sql, {"start": start_dt, "end": end_dt, "limit": limit})
-    df_view = pd.DataFrame(rows)
+accesses = st.sidebar.multiselect(
+    "Acesso (opcional)",
+    fetch_distinct_values("access_name")
+)
 
-    st.subheader(f"Amostra ({len(df_view):,} linhas)")
-    st.dataframe(df_view, use_container_width=True)
+search = st.sidebar.text_input(
+    "Texto no log / Morador / Unidade",
+    placeholder="Digite um termo"
+).strip()
+
+limit = st.sidebar.selectbox(
+    "Resultados por página",
+    [100, 250, 500, 1000],
+    index=1
+)
+
+# --- SQL ---
+where = ["event_timestamp between %(start)s and %(end)s"]
+params = {"start": start_dt, "end": end_dt, "limit": limit}
+
+if event_types:
+    where.append("event_type_code = any(%(event_types)s)")
+    params["event_types"] = event_types
+
+if accesses:
+    where.append("access_name = any(%(accesses)s)")
+    params["accesses"] = accesses
+
+if search:
+    where.append("""
+      (
+        event_description ilike %(search)s
+        or user_name ilike %(search)s
+        or unit ilike %(search)s
+        or unit_group ilike %(search)s
+      )
+    """)
+    params["search"] = f"%{search}%"
+
+sql = f"""
+select
+  event_timestamp,
+
+  concat_ws(' - ',
+    event_type_code::text,
+    event_description
+  ) || chr(10) || access_name as descricao,
+
+  user_name,
+  user_profile,
+
+  concat_ws(' ',
+    unit_group,
+    unit
+  ) as gu_unidade,
+
+  null::text as fechado,
+
+  treatment
+from public.events
+where {' and '.join(where)}
+order by event_timestamp desc, event_id desc
+limit %(limit)s;
+"""
+
+df = pd.DataFrame(fetch_df(sql, params))
+
+# --- render ---
+if df.empty:
+    st.info("Nenhum evento encontrado para os filtros.")
 else:
-    st.warning("Escolha data início e data fim para consultar.")
+    # monta colunas finais
+    df_view = pd.DataFrame({
+        "Data da ocorrência": df["event_timestamp"],
+        "Descrição": df["descricao"],
+        "Disparado por": df.apply(
+            lambda r: f"{r['user_name']} ({r['user_profile']})" if r["user_name"] else "",
+            axis=1
+        ),
+        "GU + Unidade": df["gu_unidade"],
+        "Fechado": df["fechado"],
+        "Registro do evento": df["treatment"],
+    })
+
+    # estilo do chip (Morador verde)
+    def chip(val):
+        if "(Morador)" in val:
+            return "background-color:#2ecc71;color:white;font-weight:600;"
+        return ""
+
+    st.dataframe(
+        df_view.style.applymap(chip, subset=["Disparado por"]),
+        use_container_width=True
+    )
+
+    st.caption(f"{len(df_view):,} registros exibidos")
