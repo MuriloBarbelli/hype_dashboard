@@ -284,45 +284,94 @@ elif page == "Relatórios":
     # A) Filtros no topo (layout tipo Kiper)
     # ----------------------------
     with st.container(border=True):
-        c1, c2, c3, c4 = st.columns([1.2, 2.2, 1.1, 1.1])
 
-        with c1:
-            start_date = st.date_input("Período inicial", key="start_date")
-            start_time = st.time_input("Hora inicial", value=time(0, 0), key="start_time")
+        # ===== Linha 1: Evento | Período inicial (data+hora) | Período final (data+hora) | Botão
+        col_event, col_start, col_end, col_btn = st.columns([2.4, 1.5, 1.5, 1.0], vertical_alignment="bottom")
 
-        with c2:
+        with col_event:
             event_options = fetch_event_type_options()
             event_labels = [o["label"] for o in event_options]
-            selected_event_labels = st.multiselect("Eventos (opcional)", event_labels, key="event_labels")
-
-        with c3:
-            end_date = st.date_input("Período final", key="end_date")
-            end_time = st.time_input("Hora final", value=time(23, 59), key="end_time")
-
-        with c4:
-            accesses = st.multiselect("Acesso (opcional)", fetch_distinct_values("access_name"), key="accesses")
-
-        c5, c6, c7, c8 = st.columns([1.4, 2.2, 1.6, 1.0])
-
-        with c5:
-            search = st.text_input("Texto no log / Morador / Unidade", placeholder="Digite um termo", key="search").strip()
-
-        with c6:
-            profiles = st.multiselect(
-                "Categoria do usuário (opcional)",
-                fetch_distinct_values("user_profile"),
-                key="profiles"
+            selected_event_labels = st.multiselect(
+                "Eventos (opcional)",
+                event_labels,
+                key="event_labels",
+                placeholder="Digite o código ou nome"
             )
 
-        with c7:
-            limit = st.selectbox("Resultados por página", [100, 250, 500, 1000], index=1, key="limit")
+        with col_start:
+            c_sd, c_st = st.columns([1.2, 0.8])
+            with c_sd:
+                start_date = st.date_input("Período inicial", key="start_date")
+            with c_st:
+                start_time = st.time_input("Hora", value=time(0, 0), key="start_time")
 
-        with c8:
-            # Botões
-            st.write("")  # espaçamento
-            st.write("")
+        with col_end:
+            c_ed, c_et = st.columns([1.2, 0.8])
+            with c_ed:
+                end_date = st.date_input("Período final", key="end_date")
+            with c_et:
+                end_time = st.time_input("Hora", value=time(23, 59), key="end_time")
+
+        with col_btn:
             run = st.button("Gerar relatório", type="primary", use_container_width=True)
 
+        # ===== Filtros avançados (recolhível)
+        with st.expander("Filtros avançados", expanded=False):
+            a1, a2, a3 = st.columns([1.4, 2.0, 1.2])
+
+            with a1:
+                search = st.text_input(
+                    "Texto no log / Morador / Unidade",
+                    placeholder="Digite um termo",
+                    key="search"
+                ).strip()
+
+            with a2:
+                accesses = st.multiselect(
+                    "Acesso (opcional)",
+                    fetch_distinct_values("access_name"),
+                    key="accesses",
+                    placeholder="Selecione um acesso"
+                )
+
+            with a3:
+                profiles = st.multiselect(
+                    "Categoria do usuário (opcional)",
+                    fetch_distinct_values("user_profile"),
+                    key="profiles",
+                    placeholder="Selecione categorias"
+                )
+
+            b1, b2, b3 = st.columns([1.2, 1.2, 1.6], vertical_alignment="bottom")
+
+            with b1:
+                limit = st.selectbox(
+                    "Resultados por página",
+                    [100, 250, 500, 1000],
+                    index=1,
+                    key="limit"
+                )
+
+            with b2:
+                # botão de limpar filtros (opcional)
+                if st.button("Limpar filtros", use_container_width=True):
+                    for k in ["event_labels", "accesses", "profiles", "search"]:
+                        if k in st.session_state:
+                            del st.session_state[k]
+                    st.session_state.page = 1
+                    st.rerun()
+
+            with b3:
+                st.caption("Dica: use os filtros avançados para refinar (ex.: só Moradores, só Prestadores, etc.).")
+
+
+    start_dt = datetime.combine(start_date, start_time)
+    end_dt = datetime.combine(end_date, end_time)
+
+    label_to_code = {o["label"]: o["code"] for o in event_options}
+    event_types = [label_to_code[lbl] for lbl in selected_event_labels] if selected_event_labels else []
+
+    
     # Se quiser atualizar sempre, basta forçar run=True.
     # Aqui a gente respeita o botão pra ficar estilo Kiper.
     if st.session_state.last_filter_key is None:
