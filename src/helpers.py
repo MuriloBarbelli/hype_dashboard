@@ -22,11 +22,19 @@ def ensure_shared_period():
     st.session_state.setdefault("shared_filters", {})
     st.session_state["shared_filters"].setdefault("period", {
         "date_start": date.today(),
-        "hour_start": 0,
+        "time_start": time(0, 0),
         "date_end": date.today(),
-        "hour_end": 23,
+        "time_end": time(23, 59),
     })
     return st.session_state["shared_filters"]["period"]
+
+def apply_shared_period_to_widgets():
+    """SEMPRE aplica shared->widgets antes de criar os inputs."""
+    p = ensure_shared_period()
+    st.session_state[PERIOD_KEYS["date_start"]] = p["date_start"]
+    st.session_state[PERIOD_KEYS["time_start"]] = p["time_start"]
+    st.session_state[PERIOD_KEYS["date_end"]] = p["date_end"]
+    st.session_state[PERIOD_KEYS["time_end"]] = p["time_end"]
 
 def seed_period_widgets_from_shared():
     """
@@ -56,26 +64,20 @@ def seed_period_widgets_from_shared():
     st.session_state["_period_last_applied"] = desired
 
 def sync_shared_period_from_widgets():
-  """Callback: sempre que mudar qualquer widget do período, atualiza o shared period."""
-  ensure_shared_period()
-
-  st.session_state["shared_filters"]["period"] = {
-      "date_start": st.session_state[PERIOD_KEYS["date_start"]],
-      "hour_start": int(st.session_state[PERIOD_KEYS["time_start"]].hour),
-      "date_end": st.session_state[PERIOD_KEYS["date_end"]],
-      "hour_end": int(st.session_state[PERIOD_KEYS["time_end"]].hour),
-  }
+    """Callback: widgets -> shared."""
+    ensure_shared_period()
+    st.session_state["shared_filters"]["period"] = {
+        "date_start": st.session_state[PERIOD_KEYS["date_start"]],
+        "time_start": st.session_state[PERIOD_KEYS["time_start"]],
+        "date_end": st.session_state[PERIOD_KEYS["date_end"]],
+        "time_end": st.session_state[PERIOD_KEYS["time_end"]],
+    }
 
 def init_state():
     st.session_state.setdefault("page", 1)
     st.session_state.setdefault("last_filter_key", None)
     st.session_state.setdefault("shared_filters", {})
-    st.session_state["shared_filters"].setdefault("period", {
-        "date_start": date.today(),
-        "hour_start": 0,
-        "date_end": date.today(),
-        "hour_end": 23,
-    })
+    ensure_shared_period()
 
 @st.cache_data(ttl=60)
 

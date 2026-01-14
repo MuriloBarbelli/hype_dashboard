@@ -4,11 +4,11 @@ from datetime import datetime, time
 
 from src.db import fetch_df, fetch_distinct_values
 from ui.sidebar import render_sidebar_menu
-from src.helpers import init_state, seed_period_widgets_from_shared, sync_shared_period_from_widgets, PERIOD_KEYS
+from src.helpers import init_state, apply_shared_period_to_widgets, sync_shared_period_from_widgets, PERIOD_KEYS
 
 init_state()
 
-seed_period_widgets_from_shared()
+apply_shared_period_to_widgets()
 
 st.session_state["current_page"] = "Visão geral"
 render_sidebar_menu()

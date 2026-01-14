@@ -4,12 +4,12 @@ import math
 from datetime import datetime, time
 
 from src.helpers import fetch_event_type_options, fetch_distinct_values, fetch_df, render_kiper_table
-from src.helpers import init_state, seed_period_widgets_from_shared, sync_shared_period_from_widgets, PERIOD_KEYS
+from src.helpers import init_state, apply_shared_period_to_widgets, sync_shared_period_from_widgets, PERIOD_KEYS
 from ui.sidebar import render_sidebar_menu
 
 init_state()
 
-seed_period_widgets_from_shared()
+apply_shared_period_to_widgets()
 
 st.session_state["current_page"] = "Relatórios"
 render_sidebar_menu()
@@ -73,12 +73,7 @@ with st.container(border=True):
         run = st.button("Gerar relatório", type="primary", use_container_width=True, key="rel_run")
 
     if run:
-        st.session_state["shared_filters"]["period"] = {
-            "date_start": start_date,
-            "hour_start": int(start_time.hour),
-            "date_end": end_date,
-            "hour_end": int(end_time.hour),
-        }
+        sync_shared_period_from_widgets()
 
     # ===== Filtros avançados (recolhível)
     with st.expander("Filtros avançados", expanded=False):
