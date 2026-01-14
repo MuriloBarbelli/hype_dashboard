@@ -11,6 +11,60 @@ from src.db import fetch_df, fetch_distinct_values
 # Helpers: opções + UI
 # ============================================================
 
+PERIOD_KEYS = {
+    "date_start": "period_date_start",
+    "time_start": "period_time_start",
+    "date_end": "period_date_end",
+    "time_end": "period_time_end",
+}
+
+def ensure_shared_period():
+    st.session_state.setdefault("shared_filters", {})
+    st.session_state["shared_filters"].setdefault("period", {
+        "date_start": date.today(),
+        "hour_start": 0,
+        "date_end": date.today(),
+        "hour_end": 23,
+    })
+    return st.session_state["shared_filters"]["period"]
+
+def seed_period_widgets_from_shared():
+    """
+    Aplica o shared period nos widgets quando:
+    - os widgets ainda não existem, OU
+    - o valor aplicado anteriormente é diferente do shared atual
+    (assim não sobrescreve o usuário enquanto ele está mexendo).
+    """
+    p = ensure_shared_period()
+
+    desired = (
+        p["date_start"],
+        int(p["hour_start"]),
+        p["date_end"],
+        int(p["hour_end"]),
+    )
+
+    last_applied = st.session_state.get("_period_last_applied")
+    if last_applied == desired:
+        return  # já está sincronizado
+
+    st.session_state[PERIOD_KEYS["date_start"]] = p["date_start"]
+    st.session_state[PERIOD_KEYS["time_start"]] = time(int(p["hour_start"]), 0)
+    st.session_state[PERIOD_KEYS["date_end"]] = p["date_end"]
+    st.session_state[PERIOD_KEYS["time_end"]] = time(int(p["hour_end"]), 0)
+
+    st.session_state["_period_last_applied"] = desired
+
+def sync_shared_period_from_widgets():
+  """Callback: sempre que mudar qualquer widget do período, atualiza o shared period."""
+  ensure_shared_period()
+
+  st.session_state["shared_filters"]["period"] = {
+      "date_start": st.session_state[PERIOD_KEYS["date_start"]],
+      "hour_start": int(st.session_state[PERIOD_KEYS["time_start"]].hour),
+      "date_end": st.session_state[PERIOD_KEYS["date_end"]],
+      "hour_end": int(st.session_state[PERIOD_KEYS["time_end"]].hour),
+  }
 
 def init_state():
     st.session_state.setdefault("page", 1)
@@ -22,24 +76,6 @@ def init_state():
         "date_end": date.today(),
         "hour_end": 23,
     })
-
-def get_shared_period():
-    # garante existir
-    return st.session_state["shared_filters"].setdefault("period", {
-        "date_start": date.today(),
-        "hour_start": 0,
-        "date_end": date.today(),
-        "hour_end": 23,
-    })
-
-def sync_period_from_widgets(prefix: str):
-    """Lê os widgets (date/hour) e grava no shared_filters['period']."""
-    st.session_state["shared_filters"]["period"] = {
-        "date_start": st.session_state[f"{prefix}_date_start"],
-        "hour_start": int(st.session_state[f"{prefix}_hour_start"]),
-        "date_end": st.session_state[f"{prefix}_date_end"],
-        "hour_end": int(st.session_state[f"{prefix}_hour_end"]),
-    }
 
 @st.cache_data(ttl=60)
 

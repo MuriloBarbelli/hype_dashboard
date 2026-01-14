@@ -4,16 +4,15 @@ import math
 from datetime import datetime, time
 
 from src.helpers import fetch_event_type_options, fetch_distinct_values, fetch_df, render_kiper_table
-from src.helpers import init_state, get_shared_period, sync_period_from_widgets
+from src.helpers import init_state, seed_period_widgets_from_shared, sync_shared_period_from_widgets, PERIOD_KEYS
 from ui.sidebar import render_sidebar_menu
 
 init_state()
 
+seed_period_widgets_from_shared()
+
 st.session_state["current_page"] = "Relatórios"
 render_sidebar_menu()
-
-period = get_shared_period()
-prefix = "period"  # mesmo prefix em todas as páginas que compartilham o período
 
 # ============================================================
 # PAGE: Relatórios (filtros em cima + paginação embaixo)
@@ -42,19 +41,44 @@ with st.container(border=True):
     with col_start:
         c_sd, c_st = st.columns([1.2, 0.8])
         with c_sd:
-            start_date = st.date_input("Período inicial", key="start_date")
+            start_date = st.date_input(
+                "Período inicial",
+                key=PERIOD_KEYS["date_start"],
+                on_change=sync_shared_period_from_widgets
+            )
         with c_st:
-            start_time = st.time_input("Hora", value=time(0, 0), key="start_time")
+            start_time = st.time_input(
+                "Hora",
+                key=PERIOD_KEYS["time_start"],
+                on_change=sync_shared_period_from_widgets
+            )
 
     with col_end:
         c_ed, c_et = st.columns([1.2, 0.8])
         with c_ed:
-            end_date = st.date_input("Período final", key="end_date")
+            end_date = st.date_input(
+                "Período final",
+                key=PERIOD_KEYS["date_end"],
+                on_change=sync_shared_period_from_widgets
+            )
         with c_et:
-            end_time = st.time_input("Hora", value=time(23, 59), key="end_time")
+            end_time = st.time_input(
+                "Hora",
+                key=PERIOD_KEYS["time_end"],
+                on_change=sync_shared_period_from_widgets
+            )
+
 
     with col_btn:
-        run = st.button("Gerar relatório", type="primary", use_container_width=True)
+        run = st.button("Gerar relatório", type="primary", use_container_width=True, key="rel_run")
+
+    if run:
+        st.session_state["shared_filters"]["period"] = {
+            "date_start": start_date,
+            "hour_start": int(start_time.hour),
+            "date_end": end_date,
+            "hour_end": int(end_time.hour),
+        }
 
     # ===== Filtros avançados (recolhível)
     with st.expander("Filtros avançados", expanded=False):
@@ -112,14 +136,16 @@ end_dt = datetime.combine(end_date, end_time)
 label_to_code = {o["label"]: o["code"] for o in event_options}
 event_types = [label_to_code[lbl] for lbl in selected_event_labels] if selected_event_labels else []
 
-st.session_state.shared_filters = {
-"start_dt": start_dt,
-"end_dt": end_dt,
-"event_types": event_types,
-"accesses": accesses,
-"profiles": profiles,
-"search": search,
-}
+st.session_state["shared_filters"].setdefault("relatorios", {})
+st.session_state["shared_filters"]["relatorios"].update({
+    "start_dt": start_dt,
+    "end_dt": end_dt,
+    "event_types": event_types,
+    "accesses": accesses,
+    "profiles": profiles,
+    "search": search,
+    "limit": int(limit),
+})
 
 # Se quiser atualizar sempre, basta forçar run=True.
 # Aqui a gente respeita o botão pra ficar estilo Kiper.

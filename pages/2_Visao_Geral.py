@@ -4,15 +4,14 @@ from datetime import datetime, time
 
 from src.db import fetch_df, fetch_distinct_values
 from ui.sidebar import render_sidebar_menu
-from src.helpers import init_state, get_shared_period, sync_period_from_widgets
+from src.helpers import init_state, seed_period_widgets_from_shared, sync_shared_period_from_widgets, PERIOD_KEYS
 
 init_state()
 
+seed_period_widgets_from_shared()
+
 st.session_state["current_page"] = "Visão geral"
 render_sidebar_menu()
-
-period = get_shared_period()
-prefix = "period"  # mesmo prefix em todas as páginas que compartilham o período
 
 st.set_page_config(page_title="Visão Geral • Hype", layout="wide")
 st.title("Visão geral")
@@ -59,16 +58,33 @@ with st.container(border=True):
     with col_start:
         c_sd, c_st = st.columns([1.2, 0.8])
         with c_sd:
-            start_date = st.date_input("Período inicial", key="vg_start_date")
+            start_date = st.date_input(
+                "Período inicial",
+                key=PERIOD_KEYS["date_start"],
+                on_change=sync_shared_period_from_widgets
+            )
         with c_st:
-            start_time = st.time_input("Hora", value=time(0, 0), key="vg_start_time")
+            start_time = st.time_input(
+                "Hora",
+                key=PERIOD_KEYS["time_start"],
+                on_change=sync_shared_period_from_widgets
+            )
 
     with col_end:
         c_ed, c_et = st.columns([1.2, 0.8])
         with c_ed:
-            end_date = st.date_input("Período final", key="vg_end_date")
+            end_date = st.date_input(
+                "Período final",
+                key=PERIOD_KEYS["date_end"],
+                on_change=sync_shared_period_from_widgets
+            )
         with c_et:
-            end_time = st.time_input("Hora", value=time(23, 59), key="vg_end_time")
+            end_time = st.time_input(
+                "Hora",
+                key=PERIOD_KEYS["time_end"],
+                on_change=sync_shared_period_from_widgets
+            )
+
 
     with col_btn:
         run = st.button("Gerar relatório", type="primary", use_container_width=True, key="vg_run")
