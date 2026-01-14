@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import html
-from datetime import date
+from datetime import datetime, time, timedelta, date
 import streamlit.components.v1 as components
 
 from src.ingest import normalize_kiper_csv, insert_events
@@ -22,6 +22,24 @@ def init_state():
         "date_end": date.today(),
         "hour_end": 23,
     })
+
+def get_shared_period():
+    # garante existir
+    return st.session_state["shared_filters"].setdefault("period", {
+        "date_start": date.today(),
+        "hour_start": 0,
+        "date_end": date.today(),
+        "hour_end": 23,
+    })
+
+def sync_period_from_widgets(prefix: str):
+    """Lê os widgets (date/hour) e grava no shared_filters['period']."""
+    st.session_state["shared_filters"]["period"] = {
+        "date_start": st.session_state[f"{prefix}_date_start"],
+        "hour_start": int(st.session_state[f"{prefix}_hour_start"]),
+        "date_end": st.session_state[f"{prefix}_date_end"],
+        "hour_end": int(st.session_state[f"{prefix}_hour_end"]),
+    }
 
 @st.cache_data(ttl=60)
 

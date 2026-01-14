@@ -4,14 +4,15 @@ from datetime import datetime, time
 
 from src.db import fetch_df, fetch_distinct_values
 from ui.sidebar import render_sidebar_menu
-from src.helpers import init_state
+from src.helpers import init_state, get_shared_period, sync_period_from_widgets
 
 init_state()
-period = st.session_state["shared_filters"]["period"]
 
 st.session_state["current_page"] = "Visão geral"
 render_sidebar_menu()
 
+period = get_shared_period()
+prefix = "period"  # mesmo prefix em todas as páginas que compartilham o período
 
 st.set_page_config(page_title="Visão Geral • Hype", layout="wide")
 st.title("Visão geral")
