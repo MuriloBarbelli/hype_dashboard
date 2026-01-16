@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import html
+import json
 from datetime import datetime, time, timedelta, date
 import streamlit.components.v1 as components
 
@@ -10,6 +11,50 @@ from src.db import fetch_df, fetch_distinct_values
 # ============================================================
 # Helpers: opções + UI
 # ============================================================
+
+def snapshot_filters() -> dict:
+    """Retorna um dict com tudo que define a consulta atual (period + filtros avançados)."""
+    shared = st.session_state.get("shared_filters", {})
+    period = shared.get("period", {})
+    rel = shared.get("relatorios", {})  # onde você salva event_types/accesses/profiles/search/limit etc
+
+    return {
+        "period": {
+            "date_start": str(period.get("date_start")),
+            "time_start": str(period.get("time_start")),
+            "date_end": str(period.get("date_end")),
+            "time_end": str(period.get("time_end")),
+        },
+        "relatorios": {
+            "event_types": rel.get("event_types") or [],
+            "accesses": rel.get("accesses") or [],
+            "profiles": rel.get("profiles") or [],
+            "search": rel.get("search") or "",
+            "limit": int(rel.get("limit") or 250),
+        }
+    }
+
+def filters_hash(filters: dict) -> str:
+    return json.dumps(filters, sort_keys=True, ensure_ascii=False)
+
+def mark_dirty():
+    st.session_state["filters_dirty"] = True
+
+def ensure_apply_state():
+    st.session_state.setdefault("filters_dirty", True)
+    st.session_state.setdefault("applied_filters_hash", None)
+    st.session_state.setdefault("last_apply_ts", None)
+
+def apply_filters_now():
+    """Chama quando o usuário clica em Gerar relatório."""
+    f = snapshot_filters()
+    st.session_state["applied_filters_hash"] = filters_hash(f)
+    st.session_state["filters_dirty"] = False
+    st.session_state["last_apply_ts"] = datetime.now().isoformat()
+
+def sync_period_and_mark_dirty():
+    sync_shared_period_from_widgets()
+    mark_dirty()
 
 PERIOD_KEYS = {
     "date_start": "period_date_start",

@@ -5,10 +5,13 @@ from datetime import datetime, time
 
 from src.helpers import fetch_event_type_options, fetch_distinct_values, fetch_df, render_kiper_table
 from src.helpers import init_state, apply_shared_period_to_widgets, sync_shared_period_from_widgets, PERIOD_KEYS
+from src.helpers import ensure_apply_state, apply_filters_now, mark_dirty, sync_period_and_mark_dirty
 from ui.sidebar import render_sidebar_menu
 
-init_state()
+st.set_page_config(page_title="Relatórios • Hype", layout="wide")
 
+init_state()
+ensure_apply_state()
 apply_shared_period_to_widgets()
 
 st.session_state["current_page"] = "Relatórios"
@@ -26,7 +29,7 @@ st.header("Relatórios • Eventos")
 with st.container(border=True):
 
     # ===== Linha 1: Evento | Período inicial (data+hora) | Período final (data+hora) | Botão
-    col_event, col_start, col_end, col_btn = st.columns([2.4, 1.5, 1.5, 1.0], vertical_alignment="bottom")
+    col_event, col_start, col_end, col_btn = st.columns([1.8, 1.5, 1.5, 1.0], vertical_alignment="bottom")
 
     with col_event:
         event_options = fetch_event_type_options()
@@ -39,7 +42,7 @@ with st.container(border=True):
         )
 
     with col_start:
-        c_sd, c_st = st.columns([1.2, 0.8])
+        c_sd, c_st = st.columns([1.1, 0.9])
         with c_sd:
             start_date = st.date_input(
                 "Período inicial",
@@ -54,7 +57,7 @@ with st.container(border=True):
             )
 
     with col_end:
-        c_ed, c_et = st.columns([1.2, 0.8])
+        c_ed, c_et = st.columns([1.1, 0.9])
         with c_ed:
             end_date = st.date_input(
                 "Período final",
@@ -71,6 +74,8 @@ with st.container(border=True):
 
     with col_btn:
         run = st.button("Gerar relatório", type="primary", use_container_width=True, key="rel_run")
+        if run:
+            apply_filters_now()
 
     if run:
         sync_shared_period_from_widgets()

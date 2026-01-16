@@ -5,21 +5,21 @@ from datetime import datetime, time
 from src.db import fetch_df, fetch_distinct_values
 from ui.sidebar import render_sidebar_menu
 from src.helpers import init_state, apply_shared_period_to_widgets, sync_shared_period_from_widgets, PERIOD_KEYS
+from src.helpers import ensure_apply_state, apply_filters_now, mark_dirty, sync_period_and_mark_dirty
+
+st.set_page_config(page_title="Visão Geral • Hype", layout="wide")
 
 init_state()
-
+ensure_apply_state()
 apply_shared_period_to_widgets()
+
+# (opcional) filtros avançados vindos do relatório
+rel = st.session_state.get("shared_filters", {}).get("relatorios", {})
 
 st.session_state["current_page"] = "Visão geral"
 render_sidebar_menu()
 
-st.set_page_config(page_title="Visão Geral • Hype", layout="wide")
 st.title("Visão geral")
-
-shared = st.session_state.get("shared_filters")
-if shared:
-    start_dt = shared["start_dt"]
-    end_dt = shared["end_dt"]
 
 @st.cache_data(ttl=60)
 def fetch_event_type_options():
@@ -43,7 +43,7 @@ def fetch_event_type_options():
 
 
 with st.container(border=True):
-    col_event, col_start, col_end, col_btn = st.columns([2.4, 1.5, 1.5, 1.0], vertical_alignment="bottom")
+    col_event, col_start, col_end, col_btn = st.columns([1.8, 1.5, 1.5, 1.0], vertical_alignment="bottom")
 
     with col_event:
         event_options = fetch_event_type_options()
@@ -56,7 +56,7 @@ with st.container(border=True):
         )
 
     with col_start:
-        c_sd, c_st = st.columns([1.2, 0.8])
+        c_sd, c_st = st.columns([1.1, 0.9])
         with c_sd:
             start_date = st.date_input(
                 "Período inicial",
@@ -64,14 +64,14 @@ with st.container(border=True):
                 on_change=sync_shared_period_from_widgets
             )
         with c_st:
-            start_time = st.time_input(
+            start_time = st.time_input( 
                 "Hora",
                 key=PERIOD_KEYS["time_start"],
                 on_change=sync_shared_period_from_widgets
             )
 
     with col_end:
-        c_ed, c_et = st.columns([1.2, 0.8])
+        c_ed, c_et = st.columns([1.1, 0.9])
         with c_ed:
             end_date = st.date_input(
                 "Período final",
@@ -88,6 +88,8 @@ with st.container(border=True):
 
     with col_btn:
         run = st.button("Gerar relatório", type="primary", use_container_width=True, key="vg_run")
+        if run:
+            apply_filters_now()
 
     with st.expander("Filtros avançados", expanded=False):
         a1, a2, a3 = st.columns([1.4, 2.0, 1.2])
@@ -132,6 +134,10 @@ if st.session_state.vg_last_filter_key != filter_key:
 
 if not run:
     st.info("Ajuste os filtros acima e clique em **Gerar relatório**.")
+    st.stop()
+
+if st.session_state["filters_dirty"]:
+    st.info("Ajuste os filtros acima e clique em Gerar relatório.")
     st.stop()
 
 where = ["event_timestamp between %(start)s and %(end)s"]
