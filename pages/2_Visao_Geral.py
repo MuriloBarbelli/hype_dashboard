@@ -13,6 +13,10 @@ init_state()
 ensure_apply_state()
 apply_shared_period_to_widgets()
 
+# --- defensivo: filtros compartilhados (evita NameError) ---
+filtros = st.session_state.get("shared_filters", {}) or {}
+rel = (filtros.get("relatorios", {}) or {})
+
 # (opcional) filtros avançados vindos do relatório
 rel = st.session_state.get("shared_filters", {}).get("relatorios", {})
 
@@ -41,6 +45,17 @@ def fetch_event_type_options():
         options.append({"code": code, "label": label})
     return options
 
+@st.cache_data(ttl=300)
+def fetch_view_columns(view_schema: str, view_name: str) -> list[str]:
+    sql = """
+    select column_name
+    from information_schema.columns
+    where table_schema = %(schema)s
+      and table_name = %(name)s
+    order by ordinal_position;
+    """
+    rows = fetch_df(sql, {"schema": view_schema, "name": view_name})
+    return [r["column_name"] for r in rows]
 
 with st.container(border=True):
     col_event, col_start, col_end, col_btn = st.columns([1.8, 1.5, 1.5, 1.0], vertical_alignment="bottom")
@@ -168,42 +183,148 @@ if search:
 
 where_sql = " and ".join(where)
 
-kpi_sql = f"""
-select
-  count(*)::bigint as total_eventos,
-  count(distinct access_name)::bigint as acessos_distintos,
-  count(distinct user_name)::bigint as pessoas_distintas,
-  count(distinct unit)::bigint as unidades_distintas
-from public.events
-where {where_sql};
-"""
-kpi = fetch_df(kpi_sql, params)[0]
+# --- KPIs de PASSAGENS (vw_passage_classification_v5) ---
+view_cols = fetch_view_columns("public", "vw_passage_classification_v5")
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total de eventos", f"{kpi['total_eventos']:,}")
-c2.metric("Acessos distintos", f"{kpi['acessos_distintos']:,}")
-c3.metric("Pessoas distintas", f"{kpi['pessoas_distintas']:,}")
-c4.metric("Unidades distintas", f"{kpi['unidades_distintas']:,}")
+# Mapeia nomes possíveis (pra você não ficar refém do nome exato da coluna)
+def pick_col(*candidates):
+    for c in candidates:
+        if c in view_cols:
+            return c
+    return None
+
+col_ts_start = pick_col("open_ts")
+col_access   = pick_col("door_access_name")
+col_profile  = pick_col("user_profile")
+col_search_1 = pick_col("user_name")
+col_search_2 = pick_col("unit")
+col_cause    = pick_col("cause_code")
+
+# Where da view (defensivo: só aplica cláusulas se a coluna existir)
+where_p = []
+params_p = {}
+
+if col_ts_start:
+    where_p.append(f"{col_ts_start} between %(start)s and %(end)s")
+    params_p.update({"start": start_dt, "end": end_dt})
+else:
+    st.error("Não encontrei coluna de início da passagem na view vw_passage_classification_v5.")
+    st.stop()
+
+if accesses and col_access:
+    where_p.append(f"{col_access} = any(%(accesses)s)")
+    params_p["accesses"] = accesses
+
+if profiles and col_profile:
+    where_p.append(f"{col_profile} = any(%(profiles)s)")
+    params_p["profiles"] = profiles
+
+if search:
+    parts = []
+    if col_search_1: parts.append(f"{col_search_1} ilike %(search)s")
+    if col_search_2: parts.append(f"{col_search_2} ilike %(search)s")
+    if parts:
+        where_p.append("(" + " or ".join(parts) + ")")
+        params_p["search"] = f"%{search}%"
+
+where_p_sql = " and ".join(where_p) if where_p else "true"
+
+# Expressões dos KPIs com fallback:
+facial_expr = f"sum(case when {col_cause} = 701 then 1 else 0 end)"
+botoeira_expr = f"sum(case when {col_cause} = 177 then 1 else 0 end)"
+sem_causa_expr = f"sum(case when {col_cause} is null then 1 else 0 end)"
+
+st.subheader("Resumo do período")
+
+kpi_sql = """
+with base as (
+  select
+    date(open_ts) as dia,
+    nullif(trim(user_name), '') as user_name,
+    user_profile
+  from public.vw_passage_classification_v5
+  where open_ts between %(start)s and %(end)s
+),
+pessoas as (
+  select
+    count(distinct user_name) as pessoas_unicas,
+    count(distinct case
+      when user_profile in ('Morador', 'Morador/Proprietário') then user_name
+    end) as pessoas_moradoras
+  from base
+)
+select
+  (select count(*) from base) as total_passagens,
+  (select count(distinct dia) from base) as dias,
+  pessoas_unicas,
+  pessoas_moradoras
+from pessoas;
+"""
+
+kpi = fetch_df(kpi_sql, {"start": start_dt, "end": end_dt})[0]
+
+total_passagens = kpi["total_passagens"] or 0
+dias = max(kpi["dias"] or 1, 1)
+media_dia = round(total_passagens / dias, 1)
+
+pessoas_unicas = kpi["pessoas_unicas"] or 0
+pessoas_moradoras = kpi["pessoas_moradoras"] or 0
+pessoas_nao_moradoras = max(pessoas_unicas - pessoas_moradoras, 0)
+
+# % sempre fecha 100% (quando há pessoas)
+pct_moradores = round((pessoas_moradoras / pessoas_unicas) * 100, 1) if pessoas_unicas else 0.0
+pct_nao_moradores = round(100.0 - pct_moradores, 1) if pessoas_unicas else 0.0
+
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Passagens no período", f"{total_passagens:,}")
+c2.metric("Média diária", media_dia)
+c3.metric("Pessoas únicas", f"{pessoas_unicas:,}")
+c4.metric("Moradores (%)", f"{pct_moradores}%")
+c5.metric("Não-moradores (%)", f"{pct_nao_moradores}%")
+
 
 st.divider()
 
-day_sql = f"""
+# --- Série diária (passagens por dia) ---
+day_pass_sql = f"""
 select
-  date_trunc('day', event_timestamp) as dia,
-  count(*)::bigint as eventos
-from public.events
-where {where_sql}
+  date_trunc('day', {col_ts_start}) as dia,
+  count(*)::bigint as passagens
+from public.vw_passage_classification_v5
+where {where_p_sql}
 group by 1
 order by 1;
 """
-df_day = pd.DataFrame(fetch_df(day_sql, params))
-if not df_day.empty:
-    df_day["dia"] = pd.to_datetime(df_day["dia"])
-    df_day = df_day.set_index("dia")
-    st.subheader("Eventos por dia")
-    st.line_chart(df_day["eventos"])
+df_day_p = pd.DataFrame(fetch_df(day_pass_sql, params_p))
+
+st.subheader("Passagens por dia")
+if df_day_p.empty:
+    st.info("Sem passagens no período selecionado.")
 else:
-    st.info("Sem dados para série por dia no período selecionado.")
+    df_day_p["dia"] = pd.to_datetime(df_day_p["dia"])
+    df_day_p = df_day_p.set_index("dia")
+    st.line_chart(df_day_p["passagens"])
+
+st.subheader("Fila humana — passagens sem causa (para auditoria)")
+
+if not col_cause:
+    st.warning("A view não tem coluna de causa (cause_code). Não dá pra montar a fila humana ainda.")
+else:
+    fila_sql = f"""
+    select *
+    from public.vw_passage_classification_v5
+    where {where_p_sql}
+      and {col_cause} is null
+    order by {col_ts_start} desc
+    limit 200;
+    """
+    df_fila = pd.DataFrame(fetch_df(fila_sql, params_p))
+
+    if df_fila.empty:
+        st.success("Boa: nenhuma passagem sem causa no período.")
+    else:
+        st.dataframe(df_fila, hide_index=True)
+        st.caption("Dica: use essa lista para escolher casos e inspecionar na vw_passage_audit_v5 (contexto ±10s).")
 
 hour_sql = f"""
 select
