@@ -1,0 +1,109 @@
+create or replace view public.vw_passage_classification_v5 as
+with p as (
+  select *
+  from public.vw_passages_v5
+),
+cause as (
+  select
+    p.open_event_id,
+    ce.event_id as cause_event_id,
+    ce.event_timestamp as cause_ts,
+    ce.event_type_code as cause_code,
+    ce.event_description as cause_desc,
+    ce.user_name,
+    ce.user_profile,
+    ce.unit,
+    ce.unit_group,
+    ce.handler_name,
+    ce.handler_profile
+  from p
+  left join lateral (
+    select e.*
+    from public.events e
+    where e.access_name = p.door_access_name
+      and e.event_timestamp <= p.open_ts
+      and e.event_timestamp >= p.open_ts - interval '30 seconds'
+      and e.event_type_code in (177,701,708,311)
+    order by e.event_timestamp desc
+    limit 1
+  ) ce on true
+),
+flags as (
+  select
+    p.open_event_id,
+
+    /* manteve aberto */
+    exists (
+      select 1
+      from public.events e
+      where e.access_name = p.door_access_name
+        and e.event_timestamp >= p.open_ts
+        and e.event_timestamp <= coalesce(p.close_ts, p.open_ts + interval '90 seconds')
+        and e.event_type_code = 166
+    ) as has_held_open,
+
+    /* falhas típicas (ajuste se você quiser incluir mais códigos) */
+    exists (
+      select 1
+      from public.events e
+      where e.access_name = p.door_access_name
+        and e.event_timestamp >= p.open_ts
+        and e.event_timestamp <= coalesce(p.close_ts, p.open_ts + interval '90 seconds')
+        and e.event_type_code in (112,113,114)
+    ) as has_failed_close,
+
+    /* alerta porta aberta (se 411 existir na sua base) */
+    exists (
+      select 1
+      from public.events e
+      where e.access_name = p.door_access_name
+        and e.event_timestamp >= p.open_ts
+        and e.event_timestamp <= coalesce(p.close_ts, p.open_ts + interval '90 seconds')
+        and e.event_type_code = 411
+    ) as has_door_alert
+  from p
+)
+select
+  p.open_event_id,
+  p.open_ts,
+  p.close_ts,
+  p.seconds_open,
+  p.door_access_name,
+
+  c.cause_event_id,
+  c.cause_ts,
+  c.cause_code,
+  c.cause_desc,
+
+  /* dados do "evento causa" (não do open) */
+  c.user_name,
+  c.user_profile,
+  c.unit,
+  c.unit_group,
+  c.handler_name,
+  c.handler_profile,
+
+  f.has_held_open,
+  f.has_failed_close,
+  f.has_door_alert,
+
+  /* classificação humana */
+  case
+    when c.cause_code = 701 then 'entrada_facial'
+    when c.cause_code = 708 then 'entrada_convidado_facial'
+    when c.cause_code = 177 then 'saida_botoeira'
+    when c.cause_code = 311 then 'comando_app'
+    when c.cause_code is null then 'sem_causa'
+    else 'outro'
+  end as passage_kind,
+
+  /* confiança (simples e útil pra auditoria) */
+  case
+    when c.cause_code is null then 'baixa'
+    when extract(epoch from (p.open_ts - c.cause_ts)) <= 5 then 'alta'
+    else 'media'
+  end as confianca_causa
+
+from p
+left join cause c on c.open_event_id = p.open_event_id
+left join flags f on f.open_event_id = p.open_event_id;

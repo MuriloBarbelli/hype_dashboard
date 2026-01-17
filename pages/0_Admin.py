@@ -4,6 +4,8 @@ import pandas as pd
 from src.ingest import normalize_kiper_csv, insert_events
 from ui.sidebar import render_sidebar_menu
 from src.helpers import init_state
+from src.db import refresh_materialized_views
+
 
 init_state()
 
@@ -39,8 +41,13 @@ if uploaded:
 
     if st.button("Incorporar ao banco"):
         attempted = insert_events(prepared)
+
+        with st.spinner("Atualizando visões agregadas…"):
+            refresh_materialized_views()
+
         st.success(
-            f"Ingestão enviada! Linhas tentadas: {attempted:,}. (duplicatas são ignoradas pelo banco)"
+            f"Ingestão concluída! {attempted:,} linhas processadas e visões atualizadas."
         )
+
 
 st.info("Depois do upload, vá em **Relatórios** para consultar e filtrar os eventos.")

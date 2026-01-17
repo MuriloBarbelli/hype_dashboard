@@ -1,0 +1,40 @@
+create or replace view public.vw_passages_v5 as
+with opens as (
+  select
+    e.event_id as open_event_id,
+    e.event_timestamp as open_ts,
+    e.access_name as door_access_name
+  from public.events e
+  where e.event_type_code = 165
+    and e.access_name is not null
+),
+closed as (
+  select
+    o.open_event_id,
+    c.event_id as close_event_id,
+    c.event_timestamp as close_ts
+  from opens o
+  left join lateral (
+    select e2.*
+    from public.events e2
+    where e2.access_name = o.door_access_name
+      and e2.event_type_code = 167
+      and e2.event_timestamp >= o.open_ts
+      and e2.event_timestamp <= o.open_ts + interval '90 seconds'
+    order by e2.event_timestamp
+    limit 1
+  ) c on true
+)
+select
+  o.open_event_id,
+  o.open_ts,
+  c.close_event_id,
+  c.close_ts,
+  case
+    when c.close_ts is not null then extract(epoch from (c.close_ts - o.open_ts))::int
+    else null
+  end as seconds_open,
+  o.door_access_name
+from opens o
+left join closed c
+  on c.open_event_id = o.open_event_id;

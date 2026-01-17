@@ -7,6 +7,15 @@ from ui.sidebar import render_sidebar_menu
 from src.helpers import init_state, apply_shared_period_to_widgets, sync_shared_period_from_widgets, PERIOD_KEYS
 from src.helpers import ensure_apply_state, apply_filters_now, mark_dirty, sync_period_and_mark_dirty
 
+@st.cache_data(ttl=120, show_spinner=False)
+def q_one(sql: str, params: dict):
+    rows = fetch_df(sql, params)
+    return rows[0] if rows else None
+
+@st.cache_data(ttl=120, show_spinner=False)
+def q_df(sql: str, params: dict):
+    return pd.DataFrame(fetch_df(sql, params))
+
 st.set_page_config(page_title="Visão Geral • Hype", layout="wide")
 
 init_state()
@@ -141,6 +150,8 @@ end_dt = datetime.combine(end_date, end_time)
 
 label_to_code = {o["label"]: o["code"] for o in event_options}
 event_types = [label_to_code[lbl] for lbl in selected_event_labels] if selected_event_labels else []
+event_types = tuple(label_to_code[lbl] for lbl in selected_event_labels) if selected_event_labels else tuple()
+
 
 filter_key = (start_dt, end_dt, tuple(event_types), tuple(accesses), tuple(profiles), search)
 if st.session_state.vg_last_filter_key != filter_key:
@@ -164,11 +175,11 @@ if event_types:
 
 if accesses:
     where.append("access_name = any(%(accesses)s)")
-    params["accesses"] = accesses
+    params["accesses"] = tuple(accesses)
 
 if profiles:
     where.append("user_profile = any(%(profiles)s)")
-    params["profiles"] = profiles
+    params["profiles"] = tuple(profiles)
 
 if search:
     where.append("""
@@ -213,11 +224,11 @@ else:
 
 if accesses and col_access:
     where_p.append(f"{col_access} = any(%(accesses)s)")
-    params_p["accesses"] = accesses
+    params_p["accesses"] = tuple(accesses)
 
 if profiles and col_profile:
     where_p.append(f"{col_profile} = any(%(profiles)s)")
-    params_p["profiles"] = profiles
+    params_p["profiles"] = tuple(profiles)
 
 if search:
     parts = []
@@ -236,14 +247,14 @@ sem_causa_expr = f"sum(case when {col_cause} is null then 1 else 0 end)"
 
 st.subheader("Resumo do período")
 
-kpi_sql = """
+kpi_sql = f"""
 with base as (
   select
-    date(open_ts) as dia,
-    nullif(trim(user_name), '') as user_name,
-    user_profile
+    date({col_ts_start}) as dia,
+    nullif(trim({col_search_1}), '') as user_name,
+    {col_profile} as user_profile
   from public.vw_passage_classification_v5
-  where open_ts between %(start)s and %(end)s
+  where {where_p_sql}
 ),
 pessoas as (
   select
@@ -260,6 +271,7 @@ select
   pessoas_moradoras
 from pessoas;
 """
+kpi = q_one(kpi_sql, params_p) or {}
 
 kpi = fetch_df(kpi_sql, {"start": start_dt, "end": end_dt})[0]
 
@@ -295,7 +307,7 @@ where {where_p_sql}
 group by 1
 order by 1;
 """
-df_day_p = pd.DataFrame(fetch_df(day_pass_sql, params_p))
+df_day_p = q_df(day_pass_sql, params_p)
 
 st.subheader("Passagens por dia")
 if df_day_p.empty:
@@ -318,7 +330,7 @@ else:
     order by {col_ts_start} desc
     limit 200;
     """
-    df_fila = pd.DataFrame(fetch_df(fila_sql, params_p))
+    df_fila = q_df(fila_sql, params_p)
 
     if df_fila.empty:
         st.success("Boa: nenhuma passagem sem causa no período.")
@@ -335,7 +347,7 @@ where {where_sql}
 group by 1
 order by 1;
 """
-df_hour = pd.DataFrame(fetch_df(hour_sql, params))
+df_hour = q_df(hour_sql, params)
 if not df_hour.empty:
     df_hour = df_hour.set_index("hora")
     st.subheader("Eventos por hora do dia")
@@ -359,7 +371,7 @@ group by 1
 order by 2 desc
 limit 15;
 """
-df_top_access = pd.DataFrame(fetch_df(top_access_sql, params))
+df_top_access = q_df(top_access_sql, params)
 
 top_types_sql = f"""
 select
@@ -372,7 +384,7 @@ group by event_type_code
 order by 2 desc
 limit 15;
 """
-df_top_types = pd.DataFrame(fetch_df(top_types_sql, params))
+df_top_types = q_df(top_types_sql, params)
 
 with colA:
     st.subheader("Top 15 Acessos")
@@ -397,7 +409,7 @@ where {where_sql}
 group by 1
 order by 2 desc;
 """
-df_prof = pd.DataFrame(fetch_df(prof_sql, params))
+df_prof = q_df(prof_sql, params)
 st.subheader("Eventos por categoria de usuário")
 if df_prof.empty:
     st.info("Sem dados para categorias.")
