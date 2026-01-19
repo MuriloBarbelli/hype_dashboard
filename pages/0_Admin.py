@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 
@@ -53,3 +54,28 @@ if uploaded:
             st.exception(e)
 
 st.info("Depois do upload, vá em **Relatórios** para consultar e filtrar os eventos.")
+
+
+st.header("Modo de Dados")
+
+admin_pwd = os.environ.get("ADMIN_PASSWORD", "")
+
+entered = st.text_input("Senha do Admin", type="password")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("Ativar DADOS REAIS"):
+        if admin_pwd and entered == admin_pwd:
+            st.session_state["data_mode"] = "real"
+            st.success("Modo REAL ativado (somente nesta sessão).")
+        else:
+            st.session_state["data_mode"] = "anon"
+            st.error("Senha incorreta. Mantendo modo ANÔNIMO.")
+
+with col2:
+    if st.button("Voltar para ANÔNIMO"):
+        st.session_state["data_mode"] = "anon"
+        st.info("Modo ANÔNIMO ativado.")
+
+st.caption(f"Modo atual: **{st.session_state['data_mode'].upper()}**")

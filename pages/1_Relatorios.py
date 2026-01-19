@@ -17,6 +17,11 @@ apply_shared_period_to_widgets()
 st.session_state["current_page"] = "Relatórios"
 render_sidebar_menu()
 
+def get_events_source() -> str:
+    # "real" -> tabela real
+    # qualquer outro modo -> view anon
+    return "public.events" if st.session_state.get("data_mode") == "real" else "public.vw_events_anon"
+
 # ============================================================
 # PAGE: Relatórios (filtros em cima + paginação embaixo)
 # ============================================================
@@ -211,7 +216,7 @@ if search:
 # ----------------------------
 count_sql = f"""
 select count(*) as total
-from public.events
+from {get_events_source()}
 where {' and '.join(where)};
 """
 total = fetch_df(count_sql, params)[0]["total"]
@@ -241,7 +246,7 @@ select
     unit,
 
     treatment
-from public.events
+from {get_events_source()}
 where {' and '.join(where)}
 order by event_timestamp desc, event_id desc
 limit %(limit)s

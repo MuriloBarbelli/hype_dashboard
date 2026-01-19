@@ -9,6 +9,8 @@ from src.helpers import init_state, apply_shared_period_to_widgets, sync_shared_
 from src.helpers import ensure_apply_state, apply_filters_now
 from src.helpers import KIPER_PROFILE_COLORS, get_profile_color, canonical_profile, apply_plot_theme
 
+def get_events_source() -> str:
+    return "public.events" if st.session_state.get("data_mode") == "real" else "public.vw_events_anon"
 
 @st.cache_data(ttl=120, show_spinner=False)
 def q_one(sql: str, params: dict):
@@ -43,7 +45,7 @@ def fetch_event_type_options():
     select
       event_type_code,
       max(event_description) as event_description
-    from public.events
+    from public.vw_events_anon
     where event_type_code is not null
     group by event_type_code
     order by event_type_code;

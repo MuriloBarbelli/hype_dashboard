@@ -1,103 +1,203 @@
 """
-Anonimização de nomes de usuários.
+tools/update_unit_anon_map.py
 
-- Nomes são gerados aleatoriamente (nome + sobrenome brasileiros)
-- Não há inferência de gênero por enquanto
-- A geração é determinística via ANON_SEED
-- O mesmo user_name_real sempre gera o mesmo codinome
+Atualiza a tabela public.unit_anon_map com mapeamento:
+(unit_group, unit_real) -> unit_anon
+
+✅ Regras:
+- Só cria mapeamento para eventos que REALMENTE têm unit (não nulo e não vazio)
+- "Apartamento 000" permanece "Apartamento 000"
+- Mantém o bloco/setor:
+    - NR: andares 1 a 3
+    - RES: andares 4 a 17
+- Mantém a prumada (últimos 2 dígitos) -> ex: 1702 mantém final 02
+- Evita colisão: não deixa dois aptos reais virarem o mesmo apto anon no mesmo unit_group
+- Pode rodar quantas vezes quiser (não duplica; só insere faltantes)
+- Determinístico via ANON_SEED (mas colisões podem forçar tentativas extras)
 """
 
 from dotenv import load_dotenv
 load_dotenv()
 
 import os
+import re
 import random
 from supabase import create_client
 
+
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-ANON_SEED = os.environ["ANON_SEED"]
+ANON_SEED = os.environ.get("ANON_SEED", "seed_default_dev")
 
-# Lista simples e bem "Brasil"
-FIRST_NAMES = [
-    "Adriana","Aline","Amanda","Ana","Andressa","Beatriz","Bianca","Bruna","Camila","Carolina",
-    "Catarina","Claudia","Daniela","Eduarda","Elaine","Emanuelle","Fabiana","Fernanda","Flavia","Gabriela",
-    "Giovana","Helena","Isabela","Janaína","Jaqueline","Jessica","Julia","Juliana","Karen","Larissa",
-    "Leticia","Livia","Luana","Luciana","Mariana","Marina","Mayara","Monique","Natalia","Paula",
-    "Priscila","Rafaela","Raquel","Renata","Sabrina","Tatiana","Vanessa","Vitoria","Yasmin",
 
-    "Alexandre","Anderson","Andre","Antonio","Arthur","Bernardo","Bruno","Caio","Carlos","Daniel",
-    "David","Diego","Eduardo","Felipe","Fernando","Francisco","Gabriel","Guilherme","Gustavo","Henrique",
-    "Igor","Joao","Jorge","Jose","Leonardo","Lucas","Marcelo","Marcos","Matheus","Murilo",
-    "Nicolas","Paulo","Pedro","Rafael","Ricardo","Rodrigo","Samuel","Thiago","Vitor","Vinicius"
-]
+def clean_text(s: str) -> str:
+    if s is None:
+        return ""
+    return " ".join(str(s).strip().split())
 
-LAST_NAMES = [
-    "Albuquerque","Almeida","Andrade","Araujo","Barbosa","Barros","Batista","Cardoso","Carvalho","Castro",
-    "Cavalcanti","Coelho","Correia","Costa","Cruz","Dias","Duarte","Ferraz","Fernandes","Ferreira",
-    "Figueiredo","Freitas","Gomes","Goncalves","Lima","Machado","Marques","Martins","Medeiros","Menezes",
-    "Miranda","Monteiro","Moura","Nogueira","Oliveira","Pacheco","Pereira","Ramos","Rezende","Ribeiro",
-    "Rocha","Santana","Santos","Silva","Siqueira","Teixeira","Tavares","Vasconcelos","Vieira"
-]
 
-def make_fake_name(rng: random.Random) -> str:
-    first = rng.choice(FIRST_NAMES)
-    last1 = rng.choice(LAST_NAMES)
-    # 40% de chance de ter 2 sobrenomes
-    if rng.random() < 0.40:
-        last2 = rng.choice([x for x in LAST_NAMES if x != last1])
-        return f"{first} {last1} {last2}"
-    return f"{first} {last1}"
+def extract_unit_num(unit_str: str) -> int | None:
+    """
+    Extrai número do texto tipo 'Apartamento 1305' -> 1305
+    Se não achar dígitos, retorna None.
+    """
+    if not unit_str:
+        return None
+    digits = re.sub(r"\D", "", unit_str)
+    if digits == "":
+        return None
+    return int(digits)
 
-def norm(s: str) -> str:
-    return " ".join(s.strip().split())
+
+def unit_group_floor_range(unit_group: str) -> tuple[int, int]:
+    """
+    Define range (min_floor, max_floor) inclusive.
+    """
+    ug = (unit_group or "").upper()
+    if "HYPE" in ug and "NR" in ug:
+        return (1, 3)
+    if "HYPE" in ug and "RES" in ug:
+        return (4, 17)
+    # qualquer outro grupo: mantém dentro de 1..17 (fallback)
+    return (1, 17)
+
+
+def build_anon_unit(unit_group: str, unit_real: str, used_anon_nums: set[int]) -> tuple[str, int]:
+    """
+    Gera unit_anon e unit_anon_num garantindo que unit_anon_num não colida
+    dentro do mesmo unit_group.
+    """
+    unit_num = extract_unit_num(unit_real)
+
+    # Se não deu pra extrair, devolve algo fixo sem expor (mas raro)
+    if unit_num is None:
+        # tenta gerar um "Apartamento 000" para não vazar nada
+        return ("Apartamento 000", 0)
+
+    # Apartamento 000 fica 000
+    if unit_num == 0:
+        return ("Apartamento 000", 0)
+
+    prumada = unit_num % 100
+    prumada_str = f"{prumada:02d}"
+
+    min_floor, max_floor = unit_group_floor_range(unit_group)
+
+    # RNG determinístico por (seed, group, unit_real)
+    key = f"{ANON_SEED}::unit::{unit_group}::{unit_num}"
+    rng = random.Random(key)
+
+    # tenta várias vezes até achar um floor que não colida com outro apto anon
+    for _ in range(500):
+        floor_anon = rng.randint(min_floor, max_floor)
+        anon_num = floor_anon * 100 + prumada
+        if anon_num not in used_anon_nums:
+            used_anon_nums.add(anon_num)
+            return (f"Apartamento {anon_num}", anon_num)
+
+    # fallback extremo: se colidiu demais, força um número com sufixo diferente (quase nunca)
+    # (isso muda a prumada, mas só como último recurso)
+    for _ in range(500):
+        floor_anon = rng.randint(min_floor, max_floor)
+        prumada_alt = rng.randint(1, 99)
+        anon_num = floor_anon * 100 + prumada_alt
+        if anon_num not in used_anon_nums:
+            used_anon_nums.add(anon_num)
+            return (f"Apartamento {anon_num}", anon_num)
+
+    # último fallback absoluto
+    return ("Apartamento 000", 0)
+
 
 def main():
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-    # 1) pega nomes distintos do events (sem vazios)
-    rows = (
-        supabase.table("events")
-        .select("user_name")
-        .neq("user_name", None)
-        .execute()
-        .data
-    )
-    real_names = sorted({norm(r["user_name"]) for r in rows if r.get("user_name") and norm(r["user_name"]) != ""})
+    # -----------------------------
+    # 1) Carrega mapeamentos existentes
+    # -----------------------------
+    existing_rows = supabase.table("unit_anon_map").select("*").execute().data or []
+    existing_keys = set()  # (unit_group, unit_real_clean)
+    used_by_group: dict[str, set[int]] = {}  # unit_group -> set(anon_num)
 
-    # 2) pega mapping já existente
-    existing = supabase.table("user_anon_map").select("*").execute().data
-    real_to_anon = {norm(r["user_name_real"]): r["user_name_anon"] for r in existing}
-    used_anon = set(real_to_anon.values())
+    for r in existing_rows:
+        ug = clean_text(r.get("unit_group"))
+        ur = clean_text(r.get("unit_real"))
+        ua = clean_text(r.get("unit_anon"))
+        if ug and ur:
+            existing_keys.add((ug, ur))
 
+        # registra anon_nums já usados por group, para evitar colisão
+        anon_num = extract_unit_num(ua)
+        if ug:
+            used_by_group.setdefault(ug, set())
+            if anon_num is not None:
+                used_by_group[ug].add(anon_num)
+
+    print(f"[INFO] unit_anon_map já tem {len(existing_rows)} linhas.")
+    print("[INFO] Varredura em public.events para descobrir (unit_group, unit) únicos (com paginação)...")
+
+    # -----------------------------
+    # 2) Varre events paginando e junta units únicas
+    # -----------------------------
+    page_size = 1000
+    offset = 0
+
+    found = set()  # (unit_group_clean, unit_clean)
+
+    while True:
+        batch = (
+            supabase.table("events")
+            .select("unit_group,unit")
+            .range(offset, offset + page_size - 1)
+            .execute()
+            .data
+        ) or []
+
+        if not batch:
+            break
+
+        for row in batch:
+            ug = clean_text(row.get("unit_group"))
+            unit = clean_text(row.get("unit"))
+            if unit == "":
+                continue
+            if ug == "":
+                # se não tiver grupo, ainda assim guarda (vai cair no fallback 1..17)
+                ug = "SEM_GRUPO"
+            found.add((ug, unit))
+
+        offset += page_size
+        if (offset // page_size) % 10 == 0:
+            print(f"[INFO] ...páginas lidas: {offset//page_size} | units únicas coletadas: {len(found)}")
+
+    print(f"[INFO] Total de (unit_group, unit) únicos encontrados em events: {len(found)}")
+
+    # -----------------------------
+    # 3) Monta inserts apenas do que está faltando
+    # -----------------------------
     inserts = []
-    for rn in real_names:
-        if rn in real_to_anon:
+    for ug, unit_real in sorted(found):
+        if (ug, unit_real) in existing_keys:
             continue
 
-        rng = random.Random(f"{ANON_SEED}::user::{rn}")
+        used_anon_nums = used_by_group.setdefault(ug, set())
+        unit_anon, anon_num = build_anon_unit(ug, unit_real, used_anon_nums)
 
-        # tenta achar um nome que ainda não foi usado
-        anon_name = None
-        for _ in range(600):
-            candidate = make_fake_name(rng)
-            if candidate not in used_anon:
-                anon_name = candidate
-                used_anon.add(candidate)
-                break
+        inserts.append(
+            {
+                "unit_group": ug,
+                "unit_real": unit_real,
+                "unit_anon": unit_anon,
+            }
+        )
 
-        # fallback raríssimo: adiciona sufixo
-        if anon_name is None:
-            anon_name = make_fake_name(rng) + f" {rng.randint(10, 99)}"
-            used_anon.add(anon_name)
+    if not inserts:
+        print("[OK] Nenhum apartamento novo para inserir (já está atualizado).")
+        return
 
-        inserts.append({"user_name_real": rn, "user_name_anon": anon_name})
+    supabase.table("unit_anon_map").insert(inserts).execute()
+    print(f"[OK] Inseridos {len(inserts)} apartamentos no unit_anon_map.")
 
-    if inserts:
-        supabase.table("user_anon_map").insert(inserts).execute()
-        print(f"[OK] Inseridos {len(inserts)} novos nomes no user_anon_map.")
-    else:
-        print("[OK] Nenhum nome novo para inserir (já está atualizado).")
 
 if __name__ == "__main__":
     main()
