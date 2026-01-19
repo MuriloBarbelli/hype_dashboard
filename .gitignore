@@ -12,3 +12,6 @@ postgres_string/postgress_string.rtf
 
 # OS
 .DS_Store
+
+#
+.env
