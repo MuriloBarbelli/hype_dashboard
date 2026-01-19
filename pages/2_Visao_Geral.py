@@ -1,11 +1,14 @@
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 from datetime import datetime, time
 
 from src.db import fetch_df, fetch_distinct_values
 from ui.sidebar import render_sidebar_menu
 from src.helpers import init_state, apply_shared_period_to_widgets, sync_shared_period_from_widgets, PERIOD_KEYS
-from src.helpers import ensure_apply_state, apply_filters_now, mark_dirty, sync_period_and_mark_dirty
+from src.helpers import ensure_apply_state, apply_filters_now
+from src.helpers import KIPER_PROFILE_COLORS, get_profile_color, canonical_profile, apply_plot_theme
+
 
 @st.cache_data(ttl=120, show_spinner=False)
 def q_one(sql: str, params: dict):
@@ -223,12 +226,12 @@ else:
     st.stop()
 
 if accesses and col_access:
-    where_p.append(f"{col_access} = any(%(accesses)s)")
-    params_p["accesses"] = tuple(accesses)
+    where_p.append(f"{col_access} = any(%(accesses)s::text[])")
+    params_p["accesses"] = list(accesses)
 
 if profiles and col_profile:
-    where_p.append(f"{col_profile} = any(%(profiles)s)")
-    params_p["profiles"] = tuple(profiles)
+    where_p.append(f"{col_profile} = any(%(profiles)s::text[])")
+    params_p["profiles"] = list(profiles)
 
 if search:
     parts = []
@@ -251,16 +254,16 @@ kpi_sql = f"""
 with base as (
   select
     date({col_ts_start}) as dia,
-    nullif(trim({col_search_1}), '') as user_name,
+    nullif(lower(trim({col_search_1})), '') as user_name,
     {col_profile} as user_profile
-  from public.vw_passage_classification_v5
+  from public.mv_passage_classification_v5
   where {where_p_sql}
 ),
 pessoas as (
   select
     count(distinct user_name) as pessoas_unicas,
     count(distinct case
-      when user_profile in ('Morador', 'Morador/Proprietário') then user_name
+      when user_profile in ('Morador', 'Morador/Proprietário', 'Síndico/Morador') then user_name
     end) as pessoas_moradoras
   from base
 )
@@ -272,8 +275,6 @@ select
 from pessoas;
 """
 kpi = q_one(kpi_sql, params_p) or {}
-
-kpi = fetch_df(kpi_sql, {"start": start_dt, "end": end_dt})[0]
 
 total_passagens = kpi["total_passagens"] or 0
 dias = max(kpi["dias"] or 1, 1)
@@ -291,128 +292,422 @@ c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Passagens no período", f"{total_passagens:,}")
 c2.metric("Média diária", media_dia)
 c3.metric("Pessoas únicas", f"{pessoas_unicas:,}")
-c4.metric("Moradores (%)", f"{pct_moradores}%")
-c5.metric("Não-moradores (%)", f"{pct_nao_moradores}%")
+
+def kpi_abs_pct(label: str, abs_value: int, pct_value: float):
+    st.markdown(
+        f"""
+        <div style="padding: 0.25rem 0;">
+          <div style="font-size: 0.85rem; color: rgba(49,51,63,0.6);">{label}</div>
+          <div style="font-size: 2.2rem; font-weight: 600; line-height: 1.2;">
+            {abs_value:,}
+            <span style="font-size: 1rem; font-weight: 500; color: rgba(49,51,63,0.6);">
+              ({pct_value:.1f}%)
+            </span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+with c4:
+    kpi_abs_pct("Moradores", pessoas_moradoras, pct_moradores)
+
+with c5:
+    kpi_abs_pct("Não-moradores", pessoas_nao_moradoras, pct_nao_moradores)
+
 
 
 st.divider()
 
-# --- Série diária (passagens por dia) ---
-day_pass_sql = f"""
+st.subheader("Fluxo de Pessoas")
+
+day_sql = f"""
 select
-  date_trunc('day', {col_ts_start}) as dia,
-  count(*)::bigint as passagens
+  date_trunc('day', open_ts) as dia,
+  count(*)::bigint as passagens,
+  count(distinct nullif(lower(trim(user_name)), ''))::bigint as pessoas_unicas
 from public.vw_passage_classification_v5
 where {where_p_sql}
 group by 1
 order by 1;
 """
-df_day_p = q_df(day_pass_sql, params_p)
 
-st.subheader("Passagens por dia")
-if df_day_p.empty:
-    st.info("Sem passagens no período selecionado.")
+df_day = pd.DataFrame(fetch_df(day_sql, params_p))
+
+if df_day.empty:
+    st.info("Sem dados no período selecionado.")
 else:
-    df_day_p["dia"] = pd.to_datetime(df_day_p["dia"])
-    df_day_p = df_day_p.set_index("dia")
-    st.line_chart(df_day_p["passagens"])
+    df_day["dia"] = pd.to_datetime(df_day["dia"])
 
-st.subheader("Fila humana — passagens sem causa (para auditoria)")
+    col1, col2 = st.columns(2)
 
-if not col_cause:
-    st.warning("A view não tem coluna de causa (cause_code). Não dá pra montar a fila humana ainda.")
-else:
-    fila_sql = f"""
-    select *
-    from public.vw_passage_classification_v5
-    where {where_p_sql}
-      and {col_cause} is null
-    order by {col_ts_start} desc
-    limit 200;
-    """
-    df_fila = q_df(fila_sql, params_p)
+    # -----------------------------
+    # Gráfico 1 — Passagens por dia (BARRAS)
+    # -----------------------------
+    with col1:
+        fig_pass = go.Figure()
 
-    if df_fila.empty:
-        st.success("Boa: nenhuma passagem sem causa no período.")
-    else:
-        st.dataframe(df_fila, hide_index=True)
-        st.caption("Dica: use essa lista para escolher casos e inspecionar na vw_passage_audit_v5 (contexto ±10s).")
+        fig_pass.add_bar(
+            x=df_day["dia"],
+            y=df_day["passagens"],
+            marker=dict(
+                color=df_day["passagens"],
+                colorscale="Blues",
+                line=dict(width=0)
+            ),
+            hovertemplate="Dia: %{x|%d/%m}<br>Passagens: %{y}<extra></extra>",
+        )
 
-hour_sql = f"""
-select
-  extract(hour from event_timestamp)::int as hora,
-  count(*)::bigint as eventos
-from public.events
-where {where_sql}
-group by 1
-order by 1;
-"""
-df_hour = q_df(hour_sql, params)
-if not df_hour.empty:
-    df_hour = df_hour.set_index("hora")
-    st.subheader("Eventos por hora do dia")
-    st.bar_chart(df_hour["eventos"])
-else:
-    st.info("Sem dados por hora no período selecionado.")
+        fig_pass.update_layout(
+            title="Passagens por dia",
+            height=320,
+            margin=dict(l=20, r=20, t=40, b=20),
+            xaxis_title=None,
+            yaxis_title="Passagens",
+            template="simple_white",
+            showlegend=False
+        )
+        fig_pass = apply_plot_theme(fig_pass, x_title="Passagens", y_title=None)
+        st.plotly_chart(fig_pass, use_container_width=True)
+
+    # -----------------------------
+    # Gráfico 2 — Pessoas únicas por dia (LINHA)
+    # -----------------------------
+    with col2:
+        fig_people = go.Figure()
+
+        fig_people.add_trace(
+            go.Scatter(
+                x=df_day["dia"],
+                y=df_day["pessoas_unicas"],
+                mode="lines+markers",
+                line=dict(width=3, color="#2E7D32"),
+                marker=dict(size=6),
+                hovertemplate="Dia: %{x|%d/%m}<br>Pessoas únicas: %{y}<extra></extra>",
+            )
+        )
+
+        fig_people.update_layout(
+            title="Pessoas únicas por dia",
+            height=320,
+            margin=dict(l=20, r=20, t=40, b=20),
+            xaxis_title=None,
+            yaxis_title="Pessoas",
+            template="simple_white",
+            showlegend=False
+        )
+        fig_people = apply_plot_theme(fig_people, x_title="Pessoas únicas por dia", y_title=None)
+        st.plotly_chart(fig_people, use_container_width=True)
 
 st.divider()
 
-colA, colB = st.columns(2)
+st.subheader("Horários de pico (movimento real)")
 
-top_access_sql = f"""
+# Perfis que você NÃO quer considerar para pico (ajuste conforme seus valores reais)
+EXCLUIR_PARA_PICO = {
+    "Funcionário",
+    "Zelador",
+    "Porteiro Monitoramento",
+}
+
+# Perfis considerados "do prédio"
+PERFIS_MORADOR = {
+    "Morador",
+    "Morador/Proprietário",
+    "Síndico/Morador",
+}
+
+# Monta where específico do bloco 3 (reaproveita o where_p_sql mas adiciona exclusão)
+where_peak = [where_p_sql]
+
+# Só aplica a exclusão se a coluna existir (sua view tem user_profile, então ok)
+where_peak.append("user_profile is not null")
+where_peak.append("user_profile <> all(%(excluir_perfis)s::text[])")
+
+params_peak = dict(params_p)
+params_peak["excluir_perfis"] = list(EXCLUIR_PARA_PICO)
+
+peak_sql = f"""
 select
-  access_name,
-  count(*)::bigint as eventos
-from public.events
-where {where_sql}
-  and access_name is not null
-  and access_name <> ''
+  extract(hour from open_ts)::int as hora,
+  sum(case when user_profile = any(%(perfis_morador)s::text[]) then 1 else 0 end)::bigint as moradores,
+  sum(case when user_profile <> any(%(perfis_morador)s::text[]) then 1 else 0 end)::bigint as nao_moradores
+from public.vw_passage_classification_v5
+where {' and '.join(where_peak)}
 group by 1
-order by 2 desc
-limit 15;
+order by 1;
 """
-df_top_access = q_df(top_access_sql, params)
 
-top_types_sql = f"""
+params_peak["perfis_morador"] = list(PERFIS_MORADOR)
+
+df_peak = pd.DataFrame(fetch_df(peak_sql, params_peak))
+
+check_sql = f"""
 select
-  concat_ws(' - ', event_type_code::text, max(event_description)) as evento,
-  count(*)::bigint as eventos
-from public.events
-where {where_sql}
-  and event_type_code is not null
-group by event_type_code
-order by 2 desc
-limit 15;
+  count(*)::bigint as passagens_proprietario
+from public.vw_passage_classification_v5
+where {where_p_sql}
+  and user_profile = 'Proprietário';
 """
-df_top_types = q_df(top_types_sql, params)
+n_prop = (q_one(check_sql, params_p) or {}).get("passagens_proprietario", 0) or 0
+if n_prop > 0:
+    st.warning(f"Atenção: encontrei {n_prop:,} passagens com perfil 'Proprietário' no período. (vale checar cadastro/regras)")
 
-with colA:
-    st.subheader("Top 15 Acessos")
-    if df_top_access.empty:
-        st.info("Sem dados para Top Acessos.")
-    else:
-        st.dataframe(df_top_access, use_container_width=True, hide_index=True)
 
-with colB:
-    st.subheader("Top 15 Tipos de Evento")
-    if df_top_types.empty:
-        st.info("Sem dados para Top Tipos.")
-    else:
-        st.dataframe(df_top_types, use_container_width=True, hide_index=True)
-
-prof_sql = f"""
-select
-  coalesce(nullif(user_profile,''), 'Sem categoria') as categoria,
-  count(*)::bigint as eventos
-from public.events
-where {where_sql}
-group by 1
-order by 2 desc;
-"""
-df_prof = q_df(prof_sql, params)
-st.subheader("Eventos por categoria de usuário")
-if df_prof.empty:
-    st.info("Sem dados para categorias.")
+if df_peak.empty:
+    st.info("Sem dados suficientes para montar o gráfico de pico com os filtros atuais.")
 else:
-    df_prof = df_prof.set_index("categoria")
-    st.bar_chart(df_prof["eventos"])
+    # Garante todas as horas 0..23 para o gráfico ficar estável/bonito
+    all_hours = pd.DataFrame({"hora": list(range(24))})
+    df_peak = all_hours.merge(df_peak, on="hora", how="left").fillna(0)
+
+    fig_peak = go.Figure()
+
+    fig_peak.add_bar(
+        x=df_peak["hora"],
+        y=df_peak["moradores"],
+        name="Moradores",
+        hovertemplate="Hora: %{x}h<br>Moradores: %{y}<extra></extra>",
+    )
+    fig_peak.add_bar(
+        x=df_peak["hora"],
+        y=df_peak["nao_moradores"],
+        name="Não-moradores",
+        hovertemplate="Hora: %{x}h<br>Não-moradores: %{y}<extra></extra>",
+    )
+
+    fig_peak.update_layout(
+        barmode="stack",
+        height=380,
+        title=dict(
+            text="Passagens por hora (excluindo funcionários fixos)",
+            x=0,
+            xanchor="left",
+            font=dict(size=14, color="rgba(49,51,63,0.75)"),
+        ),
+        template="simple_white",
+        xaxis=dict(title=None, tickmode="linear", dtick=1),
+        yaxis=dict(title="Passagens"),
+        margin=dict(l=20, r=20, t=45, b=30),
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=0.98,
+            xanchor="right",
+            x=0.98,
+            bgcolor="rgba(255, 255, 255, 0.8)"
+        ),
+    )
+
+    fig_peak = apply_plot_theme(fig_peak, x_title="Passagens", y_title=None)
+    st.plotly_chart(fig_peak, use_container_width=True)
+
+st.divider()
+
+st.subheader("Uso do prédio (Residencial × Não-Residencial)")
+
+uso_sql = f"""
+select
+  unit_group,
+  count(*)::bigint as passagens
+from public.vw_passage_classification_v5
+where {where_p_sql}
+group by 1;
+"""
+
+df_uso = pd.DataFrame(fetch_df(uso_sql, params_p))
+
+if df_uso.empty:
+    st.info("Sem dados suficientes para análise de uso do prédio.")
+else:
+    # Mapeamento explícito
+    MAP_GRUPO = {
+        "Bloco HYPE RES": "Residencial",
+        "Bloco HYPE NR": "Não-Residencial",
+    }
+
+    df_uso["categoria"] = df_uso["unit_group"].map(MAP_GRUPO)
+    df_main = df_uso[df_uso["categoria"].notna()].copy()
+
+    total_main = df_main["passagens"].sum()
+    total_all = df_uso["passagens"].sum()
+    fora = total_all - total_main
+
+    col1, col2 = st.columns([2, 1])
+
+    # -----------------------------
+    # Donut — RES x NR
+    # -----------------------------
+    with col1:
+        fig_uso = go.Figure(
+            data=[
+                go.Pie(
+                    labels=df_main["categoria"],
+                    values=df_main["passagens"],
+                    hole=0.55,
+                    textinfo="label+percent",
+                    hovertemplate="%{label}<br>Passagens: %{value:,}<extra></extra>",
+                )
+            ]
+        )
+
+        fig_uso.update_layout(
+            height=320,
+            template="simple_white",
+            margin=dict(l=20, r=20, t=20, b=20),
+            showlegend=False,
+        )
+        fig_uso = apply_plot_theme(fig_uso, x_title="Passagens", y_title=None)
+        st.plotly_chart(fig_uso, use_container_width=True)
+
+    # -----------------------------
+    # Texto de apoio / alerta
+    # -----------------------------
+    with col2:
+        st.markdown("**Resumo**")
+        for _, r in df_main.iterrows():
+            pct = (r["passagens"] / total_main * 100) if total_main else 0
+            st.write(f"- **{r['categoria']}**: {r['passagens']:,} passagens ({pct:.1f}%)")
+
+        if fora > 0:
+            pct_fora = fora / total_all * 100 if total_all else 0
+            st.warning(
+                f"{fora:,} passagens ({pct_fora:.1f}%) não estão associadas a "
+                f"Residencial ou NR (ADM ou sem vínculo)."
+            )
+
+st.divider()
+
+st.subheader("Acessos mais utilizados (entrada por facial)")
+st.caption("Este gráfico considera apenas passagens de ENTRADA via FACIAL.")
+
+# 1) Query: total por acesso + perfil
+acessos_sql = f"""
+select
+  door_access_name,
+  coalesce(user_profile, 'Sem perfil') as user_profile,
+  count(*)::bigint as passagens
+from public.vw_passage_classification_v5
+where {where_p_sql}
+  and cause_code in (701, 708)
+group by 1, 2;
+"""
+
+df_acc = pd.DataFrame(fetch_df(acessos_sql, params_p))
+df_acc["user_profile"] = df_acc["user_profile"].apply(canonical_profile)
+
+if df_acc.empty:
+    st.info("Sem dados de acessos no período.")
+else:
+    # 2) Ordem dos acessos: total desc (campeão em cima)
+    totals = (
+        df_acc.groupby("door_access_name", as_index=False)["passagens"]
+        .sum()
+        .rename(columns={"passagens": "total"})
+        .sort_values(["total", "door_access_name"], ascending=[False, True])
+    )
+    access_order = totals["door_access_name"].tolist()
+
+    # Ordem estável dos perfis (opcional): melhora leitura
+    profile_order = [p for p in KIPER_PROFILE_COLORS.keys() if p in df_acc["user_profile"].unique()]
+    # inclui quaisquer perfis novos que apareçam no dado
+    extras = [p for p in sorted(df_acc["user_profile"].unique()) if p not in profile_order]
+    profile_order = profile_order + extras
+
+    # 4) Pivot para empilhar barras
+    df_pivot = (
+        df_acc.pivot_table(
+            index="door_access_name",
+            columns="user_profile",
+            values="passagens",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reindex(access_order)              # ordena acessos
+        .reindex(columns=profile_order, fill_value=0)  # ordena perfis
+    )
+
+    # 5) Plotly stacked horizontal bar
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+
+    # total por acesso (para % no hover)
+    total_by_access = df_pivot.sum(axis=1)
+
+    for prof in df_pivot.columns:
+        vals = df_pivot[prof].values
+        if vals.sum() == 0:
+            continue
+
+        color = get_profile_color(prof, "#B0BEC5")
+
+        # customdata: total do acesso (para calcular %)
+        customdata = total_by_access.values
+
+        fig.add_bar(
+            y=df_pivot.index,
+            x=vals,
+            name=prof,
+            orientation="h",
+            marker=dict(color=color),
+            customdata=customdata,
+            hovertemplate=(
+            "%{y}<br>"
+            "<b>" + prof + "</b>: %{x:,}<br>"
+            "Total do acesso: %{customdata:,}<extra></extra>"
+            ),
+
+        )
+
+    # Ajuste de layout “bonito”
+    n_barras = len(df_pivot.index)
+
+    fig.update_layout(
+        barmode="stack",
+        template="simple_white",
+
+        # Altura proporcional, sem exagerar
+        height=max(420, 36 * n_barras + 120),
+
+        margin=dict(l=20, r=20, t=20, b=20),
+
+        # Eixo X
+        xaxis=dict(
+            title="Passagens",
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.06)",
+            zeroline=False,
+            tickfont=dict(size=12),
+        ),
+
+        # Eixo Y
+        yaxis=dict(
+            title=None,
+            autorange="reversed",   # campeão em cima
+            ticks="",
+            tickfont=dict(size=12),
+        ),
+
+        # Espaçamento entre barras
+        bargap=0.24,
+
+        # Legenda: dentro do gráfico, canto inferior direito
+        legend=dict(
+            orientation="v",
+            x=0.99,
+            xanchor="right",
+            y=0.02,
+            yanchor="bottom",
+            bgcolor="rgba(255,255,255,0.70)",
+            bordercolor="rgba(0,0,0,0.10)",
+            borderwidth=1,
+            font=dict(size=18),
+            title_text=None,
+        ),
+
+        legend_traceorder="normal",
+    )
+    
+
+    st.plotly_chart(fig, use_container_width=True)

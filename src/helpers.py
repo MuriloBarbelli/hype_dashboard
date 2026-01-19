@@ -1,9 +1,13 @@
+from __future__ import annotations
 import streamlit as st
 import pandas as pd
 import html
 import json
+import unicodedata
+from typing import Optional, Dict, Any
 from datetime import datetime, time, timedelta, date
 import streamlit.components.v1 as components
+import plotly.graph_objects as go
 
 from src.ingest import normalize_kiper_csv, insert_events
 from src.db import fetch_df, fetch_distinct_values
@@ -11,6 +15,150 @@ from src.db import fetch_df, fetch_distinct_values
 # ============================================================
 # Helpers: opções + UI
 # ============================================================
+
+# === Fonte única de cores (canônicas) ===
+KIPER_PROFILE_COLORS = {
+    # Moradores
+    "Morador": "#2ECC71",
+    "Morador/Proprietário": "#2ECC71",
+    "Proprietário": "#2ECC71",
+    "Familiar": "#2ECC71",
+
+    # Gestão / Staff fixo
+    "Síndico/Morador": "#7E57C2",
+    "Zelador": "#7E57C2",
+
+    # Operação / Serviços
+    "Funcionário": "#FF9800",
+    "Prestador de Serviço": "#FF9800",
+
+    # Visitantes
+    "Hóspede": "#00BCD4",
+    "Convidado": "#00BCD4",
+
+    # Outros
+    "Porteiro Monitoramento": "#455A64",
+    "Gestor de condomínio": "#546E7A",
+
+    # Fallback explícito (quando quiser usar como rótulo)
+    "Sem perfil": "#B0BEC5",
+}
+
+# Aliases -> canônico (resolve variações comuns do dado)
+_PROFILE_ALIASES = {
+    # prestador
+    "prestador de servico": "Prestador de Serviço",
+    "prestador de serviço": "Prestador de Serviço",
+    "prestador de servico ": "Prestador de Serviço",
+
+    # sindico
+    "sindico/morador": "Síndico/Morador",
+    "síndico/morador": "Síndico/Morador",
+
+    # morador/proprietario
+    "morador/proprietario": "Morador/Proprietário",
+    "morador/proprietário": "Morador/Proprietário",
+
+    # porteiro monitoramento
+    "porteiro monitoramento": "Porteiro Monitoramento",
+
+    # sem perfil
+    "": "Sem perfil",
+    "sem perfil": "Sem perfil",
+    "null": "Sem perfil",
+    "none": "Sem perfil",
+}
+
+def _norm_key(s: str) -> str:
+    """Normaliza string para chave: trim + lower + sem acento."""
+    s = (s or "").strip().lower()
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return s
+
+def canonical_profile(profile: str | None) -> str:
+    """Converte qualquer variação no perfil canônico usado no sistema."""
+    key = _norm_key(profile)
+    if key in _PROFILE_ALIASES:
+        return _PROFILE_ALIASES[key]
+    # se não for alias, tenta achar por normalização comparando com as chaves canônicas
+    for canonical in KIPER_PROFILE_COLORS.keys():
+        if _norm_key(canonical) == key:
+            return canonical
+    # fallback
+    return (profile or "").strip() or "Sem perfil"
+
+def get_profile_color(profile: str | None, default: str = "#B0BEC5") -> str:
+    """Retorna cor padronizada para o perfil, com fallback seguro."""
+    canon = canonical_profile(profile)
+    return KIPER_PROFILE_COLORS.get(canon, default)
+
+def apply_plot_theme(
+    fig: go.Figure,
+    *,
+    height: Optional[int] = None,
+    margin: Optional[Dict[str, int]] = None,
+    legend: Optional[Dict[str, Any]] = None,
+    x_title: Optional[str] = None,
+    y_title: Optional[str] = None,
+    tickfont_size: int = 12,
+    titlefont_size: int = 13,
+) -> go.Figure:
+    """
+    Aplica um tema padrão (clean) nos gráficos Plotly do app.
+    Evita props antigas (ex: titlefont) e funciona bem no Plotly atual.
+    """
+
+    # Defaults
+    if margin is None:
+        margin = dict(l=30, r=30, t=30, b=30)
+
+    base_legend = dict(
+        bgcolor="rgba(255,255,255,0.75)",
+        bordercolor="rgba(0,0,0,0.08)",
+        borderwidth=1,
+        font=dict(size=11),
+        title_text=None,
+    )
+    if legend:
+        base_legend.update(legend)
+
+    fig.update_layout(
+        template="simple_white",
+        margin=margin,
+        font=dict(
+            family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial",
+            size=12,
+            color="#223",
+        ),
+        legend=base_legend,
+    )
+
+    if height is not None:
+        fig.update_layout(height=height)
+
+    # Eixos: use update_xaxes/update_yaxes (evita keys antigas tipo titlefont)
+    fig.update_xaxes(
+        title_text=x_title if x_title is not None else fig.layout.xaxis.title.text,
+        title_font=dict(size=titlefont_size),
+        tickfont=dict(size=tickfont_size),
+        showgrid=True,
+        gridcolor="rgba(0,0,0,0.06)",
+        zeroline=False,
+        ticks="outside",
+    )
+
+    fig.update_yaxes(
+        title_text=y_title if y_title is not None else fig.layout.yaxis.title.text,
+        title_font=dict(size=titlefont_size),
+        tickfont=dict(size=tickfont_size),
+        showgrid=True,
+        gridcolor="rgba(0,0,0,0.06)",
+        zeroline=False,
+        ticks="outside",
+    )
+
+    return fig
 
 def snapshot_filters() -> dict:
     """Retorna um dict com tudo que define a consulta atual (period + filtros avançados)."""
@@ -151,27 +299,9 @@ def fetch_event_type_options():
 
 def kiper_badge(profile: str) -> str:
     """Badge (cápsula) com cor por perfil."""
-    if not profile:
-        return ""
-    p = str(profile).strip()
-
-    color_map = {
-        "Morador": "#2ecc71",
-        "Proprietário": "#2ecc71",
-        "Morador/Proprietário": "#2ecc71",
-        "Familiar": "#2ecc71",
-
-        "Zelador": "#7e57c2",
-        "Síndico/Morador": "#7e57c2",
-
-        "Prestador de serviço": "#ff9800",
-        "Funcionário": "#ff9800",
-
-        "Hóspede": "#00bcd4",
-        "Convidado": "#00bcd4",
-    }
-    bg = color_map.get(p, "#607d8b")  # fallback
-    return f"<span class='badge' style='background:{bg};'>{html.escape(p)}</span>"
+    canon = canonical_profile(profile)
+    bg = get_profile_color(canon, "#607d8b")
+    return f"<span class='badge' style='background:{bg};'>{html.escape(canon)}</span>"
 
 def render_kiper_table(df_raw: pd.DataFrame) -> None:
     """Tabela estilo Kiper via components.html (iframe)."""

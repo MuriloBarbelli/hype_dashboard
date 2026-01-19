@@ -53,10 +53,20 @@ def fetch_distinct_values(column: str):
     return [r["value"] for r in rows]
 
 def refresh_materialized_views():
+    """
+    Atualiza as materialized views após ingestão.
+    Sem CONCURRENTLY para evitar exigência de índice UNIQUE.
+    """
     sql = """
-    refresh materialized view concurrently public.mv_passages_v5;
-    refresh materialized view concurrently public.mv_passage_classification_v5;
+    refresh materialized view public.mv_passages_v5;
+    refresh materialized view public.mv_passage_classification_v5;
     """
     conn = get_conn()
     with conn.cursor() as cur:
         cur.execute(sql)
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+

@@ -42,12 +42,14 @@ if uploaded:
     if st.button("Incorporar ao banco"):
         attempted = insert_events(prepared)
 
-        with st.spinner("Atualizando visões agregadas…"):
-            refresh_materialized_views()
-
-        st.success(
-            f"Ingestão concluída! {attempted:,} linhas processadas e visões atualizadas."
-        )
-
+        try:
+            with st.spinner("Atualizando visões agregadas…"):
+                refresh_materialized_views()
+            # limpa caches de dados (Visão Geral / Relatórios)
+            st.cache_data.clear()
+            st.success(f"Ingestão concluída! {attempted:,} linhas processadas e visões atualizadas.")
+        except Exception as e:
+            st.warning("Ingestão feita, mas falhou ao atualizar as visões agregadas.")
+            st.exception(e)
 
 st.info("Depois do upload, vá em **Relatórios** para consultar e filtrar os eventos.")

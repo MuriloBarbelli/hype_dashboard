@@ -4,8 +4,8 @@ PAGES = {
     "Admin": "pages/0_Admin.py",
     "Relatórios": "pages/1_Relatorios.py",
     "Visão geral": "pages/2_Visao_Geral.py",
-    "Portas": "pages/3_Portas.py",
-    "Usuários": "pages/4_Usuarios.py",
+    "Portas (Em Breve)": "pages/3_Portas.py",
+    "Usuários (Em Breve)": "pages/4_Usuarios.py",
 }
 
 def render_sidebar_menu():
