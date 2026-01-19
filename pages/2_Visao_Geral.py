@@ -22,7 +22,6 @@ def q_df(sql: str, params: dict):
     return pd.DataFrame(fetch_df(sql, params))
 
 st.set_page_config(page_title="Visão Geral • Hype", layout="wide")
-st.caption("Para efeitos demonstrativos, está disponivel um amostragem de período entre 01/12/2025 a 18/01/2026")
 
 init_state()
 ensure_apply_state()
@@ -39,6 +38,7 @@ st.session_state["current_page"] = "Visão geral"
 render_sidebar_menu()
 
 st.title("Visão geral")
+st.caption("Para efeitos demonstrativos, está disponivel um amostragem de período entre 01/12/2025 a 18/01/2026")
 
 @st.cache_data(ttl=60)
 def fetch_event_type_options():
