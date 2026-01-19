@@ -27,7 +27,7 @@ def get_events_source() -> str:
 # ============================================================
 
 st.header("Relatórios • Eventos")
-st.caption("Para efeitos demonstrativos, está disponivel um amostragem de período entre 01/12/2025 a 18/01/2026")
+st.caption("Para efeitos demonstrativos, está disponivel uma amostragem de período entre 01/12/2025 a 18/01/2026")
 
 # ----------------------------
 # A) Filtros no topo (layout tipo Kiper)

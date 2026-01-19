@@ -38,7 +38,7 @@ st.session_state["current_page"] = "Visão geral"
 render_sidebar_menu()
 
 st.title("Visão geral")
-st.caption("Para efeitos demonstrativos, está disponivel um amostragem de período entre 01/12/2025 a 18/01/2026")
+st.caption("Para efeitos demonstrativos, está disponivel uma amostragem de período entre 01/12/2025 a 18/01/2026")
 
 @st.cache_data(ttl=60)
 def fetch_event_type_options():
