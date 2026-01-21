@@ -10,5 +10,5 @@ if "data_mode" not in st.session_state:
 def get_events_source() -> str:
     return "public.events" if st.session_state["data_mode"] == "real" else "public.vw_events_anon"
 
-st.switch_page("pages/1_Relatorios.py")  # ou o seu "0_Relatorios.py"
+st.switch_page("pages/0_Contexto_do_Projeto.py")  # Página padrão de abertura do link
 st.stop()

@@ -1,20 +1,21 @@
 import streamlit as st
 
 PAGES = {
-    "Admin": "pages/0_Admin.py",
+    "Contexto do Projeto": "pages/0_Contexto_do_Projeto.py",
     "Relatórios": "pages/1_Relatorios.py",
     "Visão geral": "pages/2_Visao_Geral.py",
     "Portas (Em Breve)": "pages/3_Portas.py",
     "Usuários (Em Breve)": "pages/4_Usuarios.py",
+    "Admin": "pages/99_Admin.py",
 }
 
 def render_sidebar_menu():
     with st.sidebar:
         options = list(PAGES.keys())
 
-        current = st.session_state.get("current_page", "Relatórios")
+        current = st.session_state.get("current_page", "Contexto do Projeto")
         if current not in options:
-            current = "Relatórios"
+            current = "Contexto do Projeto"
 
         st.sidebar.title("📌 Navegação")
 

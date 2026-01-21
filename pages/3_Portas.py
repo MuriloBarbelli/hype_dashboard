@@ -1,6 +1,5 @@
 import streamlit as st
-
 from ui.sidebar import render_sidebar_menu
 
-st.session_state["current_page"] = "Portas"
+st.session_state["current_page"] = "Portas (Em Breve)"
 render_sidebar_menu()
