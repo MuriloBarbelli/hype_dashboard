@@ -58,15 +58,16 @@ st.info("Depois do upload, vá em **Relatórios** para consultar e filtrar os ev
 
 st.header("Modo de Dados")
 
-admin_pwd = os.environ.get("ADMIN_PASSWORD", "")
-
-entered = st.text_input("Senha do Admin", type="password")
+admin_pwd = (os.environ.get("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD", "")).strip()
+entered = st.text_input("Senha do Admin", type="password").strip()
 
 col1, col2 = st.columns(2)
 
 with col1:
     if st.button("Ativar DADOS REAIS"):
-        if admin_pwd and entered == admin_pwd:
+        if not admin_pwd:
+            st.error("ADMIN_PASSWORD não está configurada no ambiente/Secrets.")
+        elif entered == admin_pwd:
             st.session_state["data_mode"] = "real"
             st.success("Modo REAL ativado (somente nesta sessão).")
         else:
@@ -78,4 +79,4 @@ with col2:
         st.session_state["data_mode"] = "anon"
         st.info("Modo ANÔNIMO ativado.")
 
-st.caption(f"Modo atual: **{st.session_state['data_mode'].upper()}**")
+st.caption(f"Modo atual: **{st.session_state.get('data_mode','anon').upper()}**")
