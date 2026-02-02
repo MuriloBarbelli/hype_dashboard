@@ -80,3 +80,6 @@ with col2:
         st.info("Modo ANÔNIMO ativado.")
 
 st.caption(f"Modo atual: **{st.session_state.get('data_mode','anon').upper()}**")
+
+st.write("DEBUG admin_pwd len:", len(admin_pwd))
+
