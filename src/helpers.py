@@ -204,6 +204,14 @@ def sync_period_and_mark_dirty():
     sync_shared_period_from_widgets()
     mark_dirty()
 
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_max_event_timestamp() -> datetime | None:
+    sql = "select max(event_timestamp) as max_ts from public.events;"
+    rows = fetch_df(sql)
+    if not rows:
+        return None
+    return rows[0].get("max_ts")
+
 PERIOD_KEYS = {
     "date_start": "period_date_start",
     "time_start": "period_time_start",
@@ -213,12 +221,27 @@ PERIOD_KEYS = {
 
 def ensure_shared_period():
     st.session_state.setdefault("shared_filters", {})
-    st.session_state["shared_filters"].setdefault("period", {
-        "date_start": date.today(),
-        "time_start": time(0, 0),
-        "date_end": date.today(),
-        "time_end": time(23, 59),
-    })
+
+    # Se ainda não existe period, vamos definir o default baseado no DB
+    if "period" not in st.session_state["shared_filters"]:
+        max_ts = fetch_max_event_timestamp()
+
+        # Fallback se a base estiver vazia (ou max_ts vier None)
+        if max_ts is None:
+            end_date = date.today()
+        else:
+            end_date = max_ts.date()
+
+        # Janela "inclusiva" de 30 dias: (fim - 29) ... fim
+        start_date = end_date - timedelta(days=29)
+
+        st.session_state["shared_filters"]["period"] = {
+            "date_start": start_date,
+            "time_start": time(0, 0),
+            "date_end": end_date,
+            "time_end": time(23, 59),
+        }
+
     return st.session_state["shared_filters"]["period"]
 
 def apply_shared_period_to_widgets():
@@ -240,9 +263,9 @@ def seed_period_widgets_from_shared():
 
     desired = (
         p["date_start"],
-        int(p["hour_start"]),
+        p["time_start"].hour,
         p["date_end"],
-        int(p["hour_end"]),
+        p["time_end"].hour,
     )
 
     last_applied = st.session_state.get("_period_last_applied")
@@ -250,9 +273,9 @@ def seed_period_widgets_from_shared():
         return  # já está sincronizado
 
     st.session_state[PERIOD_KEYS["date_start"]] = p["date_start"]
-    st.session_state[PERIOD_KEYS["time_start"]] = time(int(p["hour_start"]), 0)
+    st.session_state[PERIOD_KEYS["time_start"]] = p["time_start"]
     st.session_state[PERIOD_KEYS["date_end"]] = p["date_end"]
-    st.session_state[PERIOD_KEYS["time_end"]] = time(int(p["hour_end"]), 0)
+    st.session_state[PERIOD_KEYS["time_end"]] = p["time_end"]
 
     st.session_state["_period_last_applied"] = desired
 
