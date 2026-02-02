@@ -53,13 +53,13 @@ with st.container(border=True):
             start_date = st.date_input(
                 "Período inicial",
                 key=PERIOD_KEYS["date_start"],
-                on_change=sync_shared_period_from_widgets
+                on_change=sync_period_and_mark_dirty
             )
         with c_st:
             start_time = st.time_input(
                 "Hora",
                 key=PERIOD_KEYS["time_start"],
-                on_change=sync_shared_period_from_widgets
+                on_change=sync_period_and_mark_dirty
             )
 
     with col_end:
@@ -68,23 +68,24 @@ with st.container(border=True):
             end_date = st.date_input(
                 "Período final",
                 key=PERIOD_KEYS["date_end"],
-                on_change=sync_shared_period_from_widgets
+                on_change=sync_period_and_mark_dirty
             )
         with c_et:
             end_time = st.time_input(
                 "Hora",
                 key=PERIOD_KEYS["time_end"],
-                on_change=sync_shared_period_from_widgets
+                on_change=sync_period_and_mark_dirty
             )
 
 
     with col_btn:
-        run = st.button("Gerar relatório", type="primary", use_container_width=True, key="rel_run")
-        if run:
-            apply_filters_now()
-
-    if run:
+        run_clicked = st.button("Gerar relatório", type="primary", use_container_width=True, key="rel_run")
+    
+    if run_clicked:
         sync_shared_period_from_widgets()
+        st.session_state.page = 1  # sempre volta pra página 1 ao "gerar"
+        apply_filters_now()
+
 
     # ===== Filtros avançados (recolhível)
     with st.expander("Filtros avançados", expanded=False):
@@ -153,34 +154,15 @@ st.session_state["shared_filters"]["relatorios"].update({
     "limit": int(limit),
 })
 
-# Se quiser atualizar sempre, basta forçar run=True.
-# Aqui a gente respeita o botão pra ficar estilo Kiper.
-if st.session_state.last_filter_key is None:
-    run = True  # primeira carga
-
-start_dt = datetime.combine(start_date, start_time)
-end_dt = datetime.combine(end_date, end_time)
-
-# label -> code
-label_to_code = {o["label"]: o["code"] for o in event_options}
-event_types = [label_to_code[lbl] for lbl in selected_event_labels] if selected_event_labels else []
-
-# Se mudou filtro, reseta página
-filter_key = (
-    start_dt, end_dt,
-    tuple(event_types),
-    tuple(accesses),
-    tuple(profiles),
-    search,
-    int(limit),
-)
-if st.session_state.last_filter_key != filter_key:
-    st.session_state.page = 1
-    st.session_state.last_filter_key = filter_key
-
-# Só executa query quando clicar "Gerar relatório" (ou primeira carga)
-if not run:
+# ✅ Só roda consulta se os filtros já foram aplicados
+# (ou seja, o usuário clicou em "Gerar relatório" pelo menos uma vez nesta sessão)
+if st.session_state.get("applied_filters_hash") is None:
     st.info("Ajuste os filtros acima e clique em **Gerar relatório**.")
+    st.stop()
+
+# ✅ Se o usuário mexeu em filtros depois de aplicar, força gerar novamente
+if st.session_state.get("filters_dirty", True):
+    st.info("Filtros alterados. Clique em **Gerar relatório** para atualizar.")
     st.stop()
 
 # ----------------------------
