@@ -52,14 +52,14 @@ st.divider()
 
 st.subheader("Origem e realidade dos dados")
 st.write(
-    "Os dados analisados são **reais**, extraídos do banco operacional do condomínio (Supabase), "
+    "Os dados analisados são **reais**, extraídos do banco operacional do condomínio (Kiper / Porter), "
     "e representam eventos do sistema de controle de acesso."
 )
 st.markdown(
     "- Fonte: sistema de controle de acesso\n"
     "- Natureza: registros operacionais de eventos\n"
     "- Atualização: contínua\n"
-    "- Privacidade: **anonimização aplicada** para demonstração e portfólio\n"
+    "- Privacidade: **anonimização aplicada** para proteção de dados sensíveis conforme LGPD\n"
 )
 st.info("Este projeto não usa dados simulados nem dataset tutorial. É um caso aplicado a um cenário real.", icon="✅")
 
@@ -70,4 +70,4 @@ st.write(
     "Mais do que um painel visual, este projeto organiza perguntas gerenciais e traduz dados operacionais em "
     "**insights compreensíveis para tomada de decisão**, com rastreabilidade e consistência."
 )
-st.caption("Foco: apoiar decisões melhores — não apenas exibir métricas.")
+st.caption("Foco: apoiar decisões melhores, basear priorização e embasar discussões acerca do funcionamento do condomínio.")
