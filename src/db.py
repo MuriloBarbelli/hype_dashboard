@@ -1,22 +1,38 @@
 import streamlit as st
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from psycopg2 import OperationalError, InterfaceError, DatabaseError
+
+def _open_conn():
+    conn = psycopg2.connect(
+        st.secrets["database"]["url"],
+        cursor_factory=RealDictCursor,
+        connect_timeout=10,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5,
+    )
+    conn.autocommit = True
+    return conn
 
 @st.cache_resource
 def get_conn():
     """
-    Abre uma conexão persistente com o PostgreSQL usando a URL do st.secrets.
-    cache_resource evita abrir conexão a cada rerun do Streamlit.
+    Retorna uma conexão cacheada, MAS:
+    - se ela morrer, será recriada automaticamente
     """
-    conn = psycopg2.connect(
-        st.secrets["database"]["url"],
-        cursor_factory=RealDictCursor
-    )
+    return _open_conn()
 
-    # Recomendado para apps Streamlit (muitas leituras, reruns):
-    # evita ficar preso em transações e reduz chance de "aborted transaction".
-    conn.autocommit = True
-    return conn
+def _ensure_conn_alive(conn):
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1;")
+        return conn
+    except (OperationalError, InterfaceError, DatabaseError):
+        # conexão morreu → recria
+        st.cache_resource.clear()
+        return get_conn()
 
 def fetch_df(sql: str, params=None):
     """
@@ -24,17 +40,19 @@ def fetch_df(sql: str, params=None):
     Se uma query falhar, faz rollback para não "quebrar" a conexão cacheada.
     """
     conn = get_conn()
+    conn = _ensure_conn_alive(conn)
+
     try:
         with conn.cursor() as cur:
             cur.execute(sql, params or {})
             return cur.fetchall()
-    except Exception:
-        # Essencial quando a conexão é reaproveitada (cache_resource)
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise
+    except (OperationalError, InterfaceError, DatabaseError):
+        # se caiu DURANTE a query, tenta 1x de novo
+        st.cache_resource.clear()
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(sql, params or {})
+            return cur.fetchall()
 
 @st.cache_data(ttl=60)
 def fetch_distinct_values(column: str):
