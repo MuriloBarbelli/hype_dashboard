@@ -293,6 +293,10 @@ def init_state():
     st.session_state.setdefault("page", 1)
     st.session_state.setdefault("last_filter_key", None)
     st.session_state.setdefault("shared_filters", {})
+
+    # ✅ garante que a página Admin nunca quebra
+    st.session_state.setdefault("data_mode", "anon")
+
     ensure_shared_period()
 
 @st.cache_data(ttl=60)
