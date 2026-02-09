@@ -1,6 +1,10 @@
 import os
+import sys
+from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
+
+sys.path.append(str(Path(__file__).parent))
 
 load_dotenv()
 
