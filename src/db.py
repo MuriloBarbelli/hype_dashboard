@@ -87,4 +87,46 @@ def refresh_materialized_views():
     except Exception:
         pass
 
+def ensure_db_objects():
+    """
+    Garante objetos essenciais no banco (ex: índices) para performance.
+    Pode ser chamado em toda ingestão sem medo: usa IF NOT EXISTS.
+    """
+    sql = """
+    -- =========================================================
+    -- EVENTS (tabela base)
+    -- =========================================================
+    create index if not exists idx_events_timestamp
+    on public.events (event_timestamp);
+
+    create index if not exists idx_events_access_ts
+    on public.events (access_name, event_timestamp);
+
+    -- =========================================================
+    -- MATERIALIZED VIEW: mv_passage_classification_v5
+    -- (essa é a que costuma deixar a auditoria lenta)
+    -- =========================================================
+    create index if not exists idx_mv_passages_open_ts
+    on public.mv_passage_classification_v5 (open_ts);
+
+    create index if not exists idx_mv_passages_access_open
+    on public.mv_passage_classification_v5 (door_access_name, open_ts);
+
+    create index if not exists idx_mv_passages_access_open_close
+    on public.mv_passage_classification_v5 (door_access_name, open_ts, close_ts);
+
+
+    -- (opcional, mas ajuda muito quando você filtra por open_event_id)
+    create index if not exists idx_mv_passages_open_event_id
+    on public.mv_passage_classification_v5 (open_event_id);
+    """
+
+    conn = get_conn()
+    conn = _ensure_conn_alive(conn)
+    with conn.cursor() as cur:
+        cur.execute(sql)
+    try:
+        conn.commit()
+    except Exception:
+        pass
 

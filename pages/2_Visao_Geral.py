@@ -259,7 +259,7 @@ with base as (
     date({col_ts_start}) as dia,
     nullif(lower(trim({col_search_1})), '') as user_name,
     {col_profile} as user_profile
-  from public.mv_passage_classification_v5
+  from public.vw_passage_classification_v5
   where {where_p_sql}
 ),
 pessoas as (

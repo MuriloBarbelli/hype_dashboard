@@ -67,7 +67,9 @@ def normalize_kiper_csv(df: pd.DataFrame, source_file: str) -> pd.DataFrame:
     out = out.dropna(subset=["event_timestamp"]).copy()
 
     # event_id (dedup)
-    key_cols = ["event_timestamp", "access_name", "event_description", "user_name", "unit", "event_type_code"]
+    out["_raw_user_name"] = out["user_name"]
+
+    key_cols = ["event_timestamp", "access_name", "event_description", "_raw_user_name", "unit", "event_type_code"]
     def make_key(row):
         parts = []
         for c in key_cols:
@@ -77,6 +79,33 @@ def normalize_kiper_csv(df: pd.DataFrame, source_file: str) -> pd.DataFrame:
 
     out["event_id"] = out.apply(make_key, axis=1)
 
+    # --- regra de atribuição (Kiper vs CSV) -------------------
+    # Alguns eventos do tipo 370 ("[BASE] ABRIR PORTA") aparecem no Kiper como disparados
+    # pela Portaria / Estação de Monitoramento, mas no CSV vêm sem "Nome do usuário".
+    # Nesses casos, o operador fica nos campos de atendente (handler_*).
+    #
+    # IMPORTANTÍSSIMO: o event_id é calculado com o valor RAW de user_name (antes desta regra),
+    # para manter deduplicação estável caso você re-ingira o mesmo CSV.
+
+    mask_370 = (
+        (out["event_type_code"] == 370)
+        & (out["user_name"].isna() | (out["user_name"].astype(str).str.strip() == ""))
+        & (out["handler_name"].notna() & (out["handler_name"].astype(str).str.strip() != ""))
+    )
+    if mask_370.any():
+        out.loc[mask_370, "user_name"] = out.loc[mask_370, "handler_name"]
+        out.loc[mask_370, "user_profile"] = (
+            out.loc[mask_370, "handler_profile"]
+            .where(
+                out.loc[mask_370, "handler_profile"].notna()
+                & (out.loc[mask_370, "handler_profile"].astype(str).str.strip() != "")
+            )
+            .fillna("Porteiro Monitoramento")
+        )
+
+    # limpa coluna auxiliar
+    out = out.drop(columns=["_raw_user_name"])
+    
     # metadados
     out["source_file"] = source_file
 

@@ -331,6 +331,7 @@ def kiper_badge(profile: str) -> str:
     return f"<span class='badge' style='background:{bg};'>{html.escape(canon)}</span>"
 
 def render_kiper_table(df_raw: pd.DataFrame) -> None:
+
     """Tabela estilo Kiper via components.html (iframe)."""
     css = """
     <style>
@@ -387,6 +388,21 @@ def render_kiper_table(df_raw: pd.DataFrame) -> None:
       .col-user { width: 250px; }
       .col-gu { width: 220px; }
       .col-reg { width: auto; }
+
+    .dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    margin: 0 6px 0 0;
+    vertical-align: middle;
+    background: #B0BEC5;
+    }
+    .dot.high { background: #43A047; } /* verde */
+    .dot.med  { background: #F9A825; } /* amarelo */
+    .dot.low  { background: #E53935; } /* vermelho */
+
+
     </style>
     """
 
@@ -475,3 +491,336 @@ def render_kiper_table(df_raw: pd.DataFrame) -> None:
     </html>
     """
     components.html(table_html, height=750, scrolling=True)
+
+def audit_role_badge(role: str) -> str:
+    role = (role or "").upper()
+    colors = {
+        "OPEN":  ("#1E88E5", "OPEN"),
+        "CAUSE": ("#43A047", "CAUSE"),
+        "IN_GROUP": ("#F9A825", "NO GRUPO"),
+        "UNGROUPED": ("#B0BEC5", "NÃO AGRUPADO"),
+    }
+    bg, label = colors.get(role, ("#B0BEC5", role or ""))
+    if not label:
+        return ""
+    return f"<span class='audit-badge' style='background:{bg};'>{html.escape(label)}</span>"
+
+def group_tint(group_id: str | None) -> str:
+    """Cor pastel determinística por grupo (bem leve)."""
+    if not group_id:
+        return ""
+    h = abs(hash(str(group_id))) % 360
+    # hsl com alpha baixo (pastel)
+    return f"hsla({h}, 70%, 95%, 1.0)"
+
+def render_kiper_table_audit(df_raw: pd.DataFrame) -> None:
+    """Tabela estilo Kiper + destaque de grupos + etiquetas de auditoria."""
+    css = """
+    <style>
+      body { font-family: Inter, system-ui, Arial; margin: 0; }
+      .kiper-wrap { width: 100%; }
+
+      .kiper-table { width: 100%; border-collapse: collapse; font-family: Inter, system-ui, Arial; }
+      .kiper-table th {
+        text-align: left;
+        font-size: 13px;
+        color:#444;
+        padding: 10px 12px;
+        border-bottom:1px solid #eee;
+        position: sticky;
+        top: 0;
+        background: white;
+        z-index: 1;
+      }
+
+      .kiper-table td {
+        vertical-align: top;
+        padding: 12px;
+        border-bottom:1px solid #f0f0f0;
+        font-size: 14px;
+        color:#222;
+      }
+
+      .kiper-muted { color:#666; font-size: 12px; margin-top: 2px; }
+      .kiper-line { margin: 0; line-height: 1.2; }
+
+      .kiper-name {
+        color:#1a73e8;
+        text-decoration: underline;
+        font-weight: 500;
+        display:inline-block;
+      }
+
+      .badge {
+        display:inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        color:#fff;
+        font-size: 12px;
+        font-weight: 600;
+        margin-top: 6px;
+        width: fit-content;
+      }
+
+      .cell-stack { display:flex; flex-direction:column; gap:4px; }
+      .row-hover:hover td { background: rgba(0,0,0,0.02); }
+
+      .audit-badge{
+        display:inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        color:#fff;
+        font-size: 11px;
+        font-weight: 700;
+        width: fit-content;
+      }
+
+      .audit-note{
+        margin-top: 6px;
+        font-size: 12px;
+        color:#222;
+        padding: 8px 10px;
+        border-radius: 10px;
+        background: rgba(0,0,0,0.04);
+        border: 1px solid rgba(0,0,0,0.06);
+        }
+        .audit-note div { margin: 2px 0; }
+
+      .group-band{
+        border-left: 6px solid rgba(0,0,0,0.06);
+      }
+
+      .group-start td {
+        border-top: 6px solid rgba(0,0,0,0.06);
+      }
+
+
+      .col-date { width: 160px; }
+      .col-desc { width: 460px; }
+      .col-user { width: 250px; }
+      .col-gu { width: 220px; }
+      .col-reg { width: auto; }
+
+        .dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        margin: 0 6px 0 0;
+        vertical-align: middle;
+        background: #B0BEC5;
+      }
+      .dot.high { background: #43A047; } /* verde */
+      .dot.med  { background: #F9A825; } /* amarelo */
+      .dot.low  { background: #E53935; } /* vermelho */
+
+      .audit-banner{
+        background: rgba(0,0,0,0.03);
+        border: 1px solid rgba(0,0,0,0.08);
+        border-left: 8px solid rgba(0,0,0,0.18);
+        border-radius: 10px;
+        padding: 10px 12px;
+        display: inline-block;
+        max-width: 100%;
+        }
+        .audit-banner div{
+        line-height: 1.25;
+        }
+      
+    </style>
+    """
+
+    rows_html = []
+    shown_label_groups = set()
+
+    # Paleta fixa (borda bem visível) — não depende de hash/HSL
+    GROUP_PALETTE = [
+        "#1E88E5",  # azul
+        "#8E24AA",  # roxo
+        "#43A047",  # verde
+        "#F4511E",  # laranja
+        "#3949AB",  # índigo
+        "#00897B",  # teal
+        "#6D4C41",  # marrom
+        "#D81B60",  # magenta
+        "#5E35B1",  # roxo escuro
+        "#039BE5",  # azul claro
+        "#7CB342",  # verde limão
+        "#FB8C00",  # laranja claro
+    ]
+
+    group_color_map = {}
+    group_order = []
+    def color_for_group(gid: str | None) -> str:
+        if not gid:
+            return "#B0BEC5"
+        if gid not in group_color_map:
+            group_order.append(gid)
+            group_color_map[gid] = GROUP_PALETTE[(len(group_order) - 1) % len(GROUP_PALETTE)]
+        return group_color_map[gid]
+    
+    group_bg_parity = {}
+    def bg_for_group(gid: str | None) -> str:
+        if not gid:
+            return "rgba(0,0,0,0.00)"
+        if gid not in group_bg_parity:
+            group_bg_parity[gid] = len(group_bg_parity) % 2
+        # alternância bem perceptível, mas suave
+        return "rgba(0,0,0,0.02)" if group_bg_parity[gid] == 0 else "rgba(0,0,0,0.06)"
+
+    for _, r in df_raw.iterrows():
+        dt = r.get("event_timestamp")
+        if pd.notnull(dt):
+            date_str = dt.strftime("%d/%m/%Y")
+            time_str = dt.strftime("%H:%M:%S")
+        else:
+            date_str, time_str = "", ""
+
+        desc_lines = str(r.get("descricao") or "").split("\n")
+        desc_html = "".join([f"<p class='kiper-line'>{html.escape(line)}</p>" for line in desc_lines if line])
+
+        user_name = str(r.get("user_name") or "").strip()
+        user_profile = str(r.get("user_profile") or "").strip()
+
+        user_html_parts = []
+        if user_name:
+            user_html_parts.append(f"<span class='kiper-name'>{html.escape(user_name)}</span>")
+        if user_profile:
+            user_html_parts.append(kiper_badge(user_profile))
+        user_html = "<div class='cell-stack'>" + "".join(user_html_parts) + "</div>" if user_html_parts else ""
+
+        ug = str(r.get("unit_group") or "").strip()
+        un = str(r.get("unit") or "").strip()
+        gu_html = "<div class='cell-stack'>"
+        if ug:
+            gu_html += f"<p class='kiper-line'>{html.escape(ug)}</p>"
+        if un:
+            gu_html += f"<p class='kiper-line'>{html.escape(un)}</p>"
+        gu_html += "</div>"
+
+        treatment = str(r.get("treatment") or "").strip()
+
+        # --- auditoria
+        role = str(r.get("audit_role") or "UNGROUPED").upper()
+        group_id = str(r.get("audit_group") or "").strip() or None
+
+        # detecta começo de grupo (para separar visualmente)
+        is_group_start = False
+        if group_id:
+            if "_prev_group_id" not in locals():
+                _prev_group_id = None
+            is_group_start = (group_id != _prev_group_id)
+            _prev_group_id = group_id
+
+        border = color_for_group(group_id)
+
+        # fundo bem leve, mas sempre consistente (não “some”)
+        bg = bg_for_group(group_id)
+
+
+        tr_style = f"background:{bg}; border-left: 8px solid {border};"
+        tr_class = "row-hover"
+        if is_group_start:
+            tr_class += " group-start"
+
+        interp = str(r.get("audit_interpretation") or "").strip()
+
+        role_chip = audit_role_badge(role)
+
+        audit_html = ""
+        if role_chip:
+            audit_html += role_chip
+
+        # etiqueta "interpretei como" só quando ajuda (OPEN/CAUSE) e se tiver interp
+        show_label = bool(interp) and bool(group_id) and (group_id not in shown_label_groups) and (role == "CAUSE")
+        if show_label:
+            shown_label_groups.add(group_id)
+
+            lines = [ln for ln in interp.splitlines() if ln.strip()]
+
+            def fmt_audit_line(ln: str) -> str:
+                low = ln.strip().lower()
+
+                if low.startswith("confiança:"):
+                    val = ln.split(":", 1)[1].strip()
+                    vlow = val.lower()
+
+                    cls = ""
+                    if vlow.startswith("alta"):
+                        cls = "high"
+                    elif vlow.startswith("média") or vlow.startswith("media"):
+                        cls = "med"
+                    elif vlow.startswith("baixa"):
+                        cls = "low"
+
+                    dot = f"<span class='dot {cls}'></span>" if cls else "<span class='dot'></span>"
+                    return f"<div><b>Confiança:</b> {dot}{html.escape(val)}</div>"
+
+                if low.startswith("categoria:"):
+                    return f"<div><b>Categoria:</b> {html.escape(ln.split(':',1)[1].strip())}</div>"
+                if low.startswith("causa:"):
+                    return f"<div><b>Causa:</b> {html.escape(ln.split(':',1)[1].strip())}</div>"
+
+                return f"<div>{html.escape(ln)}</div>"
+
+            items = "".join(fmt_audit_line(ln) for ln in lines)
+
+            # linha extra “full width”
+            rows_html.append(
+                f"<tr style='{tr_style}'>"
+                f"<td colspan='5' style='padding: 0 14px 10px 14px;'>"
+                f"<div class='audit-banner'>{items}</div>"
+                f"</td>"
+                f"</tr>"
+            )
+
+
+        # Se não agrupado, coloca nota curta pra facilitar caça de gaps
+        if role == "UNGROUPED":
+            audit_html += "<div class='audit-note'>Evento fora de grupos</div>"
+
+        reg_html = f"<p class='kiper-line'>{html.escape(treatment)}</p>"
+        if audit_html:
+            reg_html += f"<div style='margin-top:8px;'>{audit_html}</div>"
+
+        rows_html.append(
+            f"""
+            <tr class="{tr_class}" style="{tr_style}">
+              <td class="col-date">
+                <div class="cell-stack">
+                  <div>{html.escape(date_str)}</div>
+                  <div class="kiper-muted">{html.escape(time_str)}</div>
+                </div>
+              </td>
+              <td class="col-desc">{desc_html}</td>
+              <td class="col-user">{user_html}</td>
+              <td class="col-gu">{gu_html}</td>
+              <td class="col-reg">{reg_html}</td>
+            </tr>
+            """
+        )
+
+    table_html = f"""
+    <html>
+      <head>{css}</head>
+      <body>
+        <div class="kiper-wrap">
+          <table class="kiper-table">
+            <thead>
+              <tr>
+                <th class="col-date">Data da ocorrência</th>
+                <th class="col-desc">Descrição</th>
+                <th class="col-user">Disparado por</th>
+                <th class="col-gu">GU + Unidade</th>
+                <th class="col-reg">Registro do evento</th>
+              </tr>
+            </thead>
+            <tbody>
+              {''.join(rows_html)}
+            </tbody>
+          </table>
+        </div>
+      </body>
+    </html>
+    """
+    components.html(table_html, height=800, scrolling=True)

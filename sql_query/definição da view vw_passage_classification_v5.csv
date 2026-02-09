@@ -1,0 +1,22 @@
+pg_get_viewdef
+" SELECT open_event_id,
+    open_ts,
+    close_ts,
+    seconds_open,
+    door_access_name,
+    cause_event_id,
+    cause_ts,
+    cause_code,
+    cause_desc,
+    user_name,
+    user_profile,
+    unit,
+    unit_group,
+    handler_name,
+    handler_profile,
+    has_held_open,
+    has_failed_close,
+    has_door_alert,
+    passage_kind,
+    confianca_causa
+   FROM vw_passage_classification_v5;"
