@@ -7,7 +7,8 @@ import time as pytime
 from src.ingest import normalize_kiper_csv, insert_events
 from ui.sidebar import render_sidebar_menu
 from src.helpers import init_state, render_kiper_table_audit
-from src.db import refresh_materialized_views, fetch_df, ensure_db_objects
+from src.db import refresh_materialized_views, fetch_df, ensure_db_objects, build_event_audit_map_for_source_file
+
 
 init_state()
 
@@ -49,18 +50,24 @@ if uploaded:
     st.dataframe(prepared.head(50), use_container_width=True)
 
     if st.button("Incorporar ao banco"):
-        attempted = insert_events(prepared)
+      attempted = insert_events(prepared)
 
-        try:
-            with st.spinner("Preparando banco (índices) + atualizando visões…"):
-                ensure_db_objects()
-                refresh_materialized_views()
-            # limpa caches de dados (Visão Geral / Relatórios)
-            st.cache_data.clear()
-            st.success(f"Ingestão concluída! {attempted:,} linhas processadas e visões atualizadas.")
-        except Exception as e:
-            st.warning("Ingestão feita, mas falhou ao atualizar as visões agregadas.")
-            st.exception(e)
+      try:
+          with st.spinner("Preparando banco (índices) + atualizando visões + gerando cache da auditoria…"):
+              ensure_db_objects()
+              refresh_materialized_views()
+
+              # ✅ build incremental por arquivo (source_file)
+              # como você aceitou múltiplos arquivos, roda um por um
+              for f in uploaded:
+                  build_event_audit_map_for_source_file(f.name, slack_seconds=30)
+
+          st.cache_data.clear()
+          st.success(f"Ingestão concluída! {attempted:,} linhas processadas, visões atualizadas e auditoria pronta.")
+      except Exception as e:
+          st.warning("Ingestão feita, mas falhou ao atualizar visões / cache.")
+          st.exception(e)
+
 
 st.info("Depois do upload, vá em **Relatórios** para consultar e filtrar os eventos.")
 
@@ -124,114 +131,40 @@ def fetch_audit_events_with_passage(
     #   trocamos p/ mv para ficar ainda mais rápido.
     #.  SEMPRE USAR vw
     sql = f"""
-    with e as (
-      select
-        event_id, event_timestamp, event_type_code,
-        event_description, access_name,
-        user_name, user_profile, unit,
-        handler_name, handler_profile, treatment
-      from {src}
-      where event_timestamp >= %(start)s
-        and event_timestamp <= %(end)s
-        and (%(door)s = '' or access_name ilike ('%%' || %(door)s || '%%'))
-      order by event_timestamp asc
-      limit %(limit)s
-      offset %(offset)s
-    ),
-    p as (
-      select
-        open_event_id,
-        open_ts,
-        close_ts,
-        door_access_name,
-        cause_event_id,
-        cause_code,
-        passage_kind,
-        confianca_causa,
-        seconds_open,
-        has_held_open,
-        has_failed_close,
-        has_door_alert
-      from public.vw_passage_classification_v5
-      where open_ts >= %(start)s
-        and open_ts <= %(end)s
-        and (%(door)s = '' or door_access_name ilike ('%%' || %(door)s || '%%'))
-    ),
-    joined as (
-      select
-        e.*,
-        m.open_event_id as audit_group,
-        case
-          when m.open_event_id is null then 'UNGROUPED'
-          when e.event_id = m.open_event_id then 'OPEN'
-          when e.event_id = m.cause_event_id then 'CAUSE'
-          else 'IN_GROUP'
-        end as audit_role,
-        case
-          when m.open_event_id is null then null
-          else (
-            'Categoria: ' ||
-            (case m.passage_kind
-              when 'entrada_facial' then 'Entrada (Facial)'
-              when 'saida_botoeira' then 'Saída (Botoeira)'
-              when 'entrada_botoeira' then 'Entrada (Botoeira)'
-              when 'saida_facial' then 'Saída (Facial)'
-              when 'entrada_sem_id' then 'Entrada (Sem identificação)'
-              when 'saida_sem_id' then 'Saída (Sem identificação)'
-              else coalesce(m.passage_kind, '—')
-            end)
-            || E'\nCausa: ' ||
-            (case m.cause_code
-              when 701 then 'Reconhecimento facial'
-              when 177 then 'Botoeira de saída'
-              when 165 then 'Porta abriu'
-              when 167 then 'Porta fechou'
-              else ('Código ' || coalesce(m.cause_code::text,'—'))
-            end)
-            || E'\nConfiança: ' ||
-            (case lower(coalesce(m.confianca_causa,''))
-              when 'alta' then 'Alta'
-              when 'media' then 'Média'
-              when 'baixa' then 'Baixa'
-              else '—'
-            end)
-          )
-        end as audit_interpretation,
+    select
+      e.event_id,
+      e.event_timestamp,
+      e.event_type_code,
+      e.event_description,
+      e.access_name,
+      e.user_name,
+      e.user_profile,
+      e.unit,
+      e.handler_name,
+      e.handler_profile,
+      e.treatment,
 
+      a.audit_group,
+      coalesce(a.audit_role, 'UNGROUPED') as audit_role,
+      a.audit_interpretation,
+      a.audit_score
 
+    from public.events e
+    left join public.event_audit_map a
+      on a.event_id = e.event_id
 
-        -- score básico (igual sua lógica, mas simplificado no SQL)
-        case
-          when m.open_event_id is null then null
-          else (
-            80
-            - (case when lower(coalesce(m.confianca_causa,''))='media' then 15 else 0 end)
-            - (case when lower(coalesce(m.confianca_causa,''))='baixa' then 30 else 0 end)
-            - (case when coalesce(m.has_failed_close,false) then 20 else 0 end)
-            - (case when coalesce(m.has_door_alert,false) then 15 else 0 end)
-            - (case when coalesce(m.has_held_open,false) then 10 else 0 end)
-            - (case when coalesce(m.seconds_open,0) >= 30 then 10 else 0 end)
-            - (case when coalesce(m.seconds_open,0) >= 120 then 20 else 0 end)
-          )
-        end as audit_score
-      from e
-      left join lateral (
-        select *
-        from p
-        where p.door_access_name = e.access_name
-          and e.event_timestamp >= (p.open_ts - ( %(slack)s || ' seconds')::interval)
-          and e.event_timestamp <= (p.close_ts + ( %(slack)s || ' seconds')::interval)
-        order by p.open_ts desc
-        limit 1
-      ) m on true
-    )
-    select *
-    from joined
-    where
-      (%(show_ungrouped)s = true or audit_role <> 'UNGROUPED')
-      and (%(only_suspicious)s = false or (audit_score is not null and audit_score <= 60))
-    order by event_timestamp asc;
+    where e.event_timestamp >= %(start)s
+      and e.event_timestamp <= %(end)s
+      and (%(door)s = '' or e.access_name ilike ('%%' || %(door)s || '%%'))
+
+      and (%(show_ungrouped)s = true or coalesce(a.audit_role,'UNGROUPED') <> 'UNGROUPED')
+      and (%(only_suspicious)s = false or (a.audit_score is not null and a.audit_score <= 60))
+
+    order by e.event_timestamp asc
+    limit %(limit)s
+    offset %(offset)s;
     """
+
 
     return pd.DataFrame(fetch_df(sql, params))
 

@@ -223,7 +223,7 @@ select
     ) || chr(10) || access_name as descricao,
 
     coalesce(nullif(user_name,''), handler_name) as user_name,
-    coalesce(nullif(user_profile,''), handler_profile) as user_profile,
+    coalesce(nullif(user_profile,''), handler_profile) as user_profile,`
 
     unit_group,
     unit,
