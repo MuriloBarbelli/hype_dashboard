@@ -172,8 +172,7 @@ where = ["event_timestamp between %(start)s and %(end)s"]
 params = {"start": start_dt, "end": end_dt, "limit": limit}
 
 if event_types:
-    where.append("event_type_code = any(%(event_types)s::int[])")
-
+    where.append("nullif(event_type_code,'')::int = any(%(event_types)s::int[])")
     params["event_types"] = event_types
 
 if accesses:
@@ -224,7 +223,7 @@ select
     ) || chr(10) || access_name as descricao,
 
     coalesce(nullif(user_name,''), handler_name) as user_name,
-    coalesce(nullif(user_profile,''), handler_profile) as user_profile,`
+    coalesce(nullif(user_profile,''), handler_profile) as user_profile,
 
     unit_group,
     unit,
