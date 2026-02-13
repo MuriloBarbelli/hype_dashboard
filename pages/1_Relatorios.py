@@ -140,8 +140,8 @@ with st.container(border=True):
 start_dt = datetime.combine(start_date, start_time)
 end_dt = datetime.combine(end_date, end_time)
 
-label_to_code = {o["label"]: o["code"] for o in event_options}
-event_types = [label_to_code[lbl] for lbl in selected_event_labels] if selected_event_labels else []
+label_to_code = {o["label"]: int(o["code"]) for o in event_options}
+event_types = [int(label_to_code[lbl]) for lbl in selected_event_labels] if selected_event_labels else []
 
 st.session_state["shared_filters"].setdefault("relatorios", {})
 st.session_state["shared_filters"]["relatorios"].update({
@@ -172,15 +172,16 @@ where = ["event_timestamp between %(start)s and %(end)s"]
 params = {"start": start_dt, "end": end_dt, "limit": limit}
 
 if event_types:
-    where.append("event_type_code = any(%(event_types)s)")
+    where.append("event_type_code = any(%(event_types)s::int[])")
+
     params["event_types"] = event_types
 
 if accesses:
-    where.append("access_name = any(%(accesses)s)")
+    where.append("access_name = any(%(accesses)s::text[])")
     params["accesses"] = accesses
 
 if profiles:
-    where.append("user_profile = any(%(profiles)s)")
+    where.append("user_profile = any(%(profiles)s::text[])")
     params["profiles"] = profiles
 
 if search:
