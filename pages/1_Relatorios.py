@@ -172,7 +172,10 @@ where = ["event_timestamp between %(start)s and %(end)s"]
 params = {"start": start_dt, "end": end_dt, "limit": limit}
 
 if event_types:
-    where.append("nullif(event_type_code,'')::int = any(%(event_types)s::int[])")
+    where.append("""
+      nullif(substring(event_type_code::text from '^[0-9]+'), '')::int
+      = any(%(event_types)s::int[])
+    """)
     params["event_types"] = event_types
 
 if accesses:
