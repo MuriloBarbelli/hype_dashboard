@@ -57,6 +57,12 @@ if uploaded:
               ensure_db_objects()
               refresh_materialized_views()
 
+              # depois do refresh_materialized_views()
+              source_files = sorted(set(prepared["source_file"].dropna().astype(str).tolist()))
+              for sf in source_files:
+                  build_event_audit_map_for_source_file(sf, slack_seconds=30)
+
+
               # ✅ build incremental por arquivo (source_file)
               # como você aceitou múltiplos arquivos, roda um por um
               for f in uploaded:
