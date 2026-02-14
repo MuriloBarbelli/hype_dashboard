@@ -7,7 +7,15 @@ import time as pytime
 from src.ingest import normalize_kiper_csv, insert_events
 from ui.sidebar import render_sidebar_menu
 from src.helpers import init_state, render_kiper_table_audit
-from src.db import refresh_materialized_views, fetch_df, ensure_db_objects, build_event_audit_map_for_source_file
+from src.db import (
+    refresh_materialized_views,
+    fetch_df,
+    ensure_db_objects,
+    build_event_audit_map_for_source_file,
+    rebuild_event_audit_map_all_sources,
+)
+
+
 
 
 init_state()
@@ -57,19 +65,14 @@ if uploaded:
               ensure_db_objects()
               refresh_materialized_views()
 
-              # depois do refresh_materialized_views()
+              # build incremental por source_file que REALMENTE foi inserido
               source_files = sorted(set(prepared["source_file"].dropna().astype(str).tolist()))
               for sf in source_files:
                   build_event_audit_map_for_source_file(sf, slack_seconds=30)
 
-
-              # ✅ build incremental por arquivo (source_file)
-              # como você aceitou múltiplos arquivos, roda um por um
-              for f in uploaded:
-                  build_event_audit_map_for_source_file(f.name, slack_seconds=30)
-
           st.cache_data.clear()
           st.success(f"Ingestão concluída! {attempted:,} linhas processadas, visões atualizadas e auditoria pronta.")
+
       except Exception as e:
           st.warning("Ingestão feita, mas falhou ao atualizar visões / cache.")
           st.exception(e)
