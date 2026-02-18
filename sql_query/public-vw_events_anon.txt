@@ -1,0 +1,41 @@
+  CREATE OR REPLACE VIEW public.vw_events_anon AS
+  SELECT e.event_id,
+    e.event_timestamp,
+    e.treatment_finished_at,
+    e.event_type_code,
+    e.event_description,
+    e.access_name,
+      CASE
+  -- sem usuário
+  WHEN e.user_name IS NULL OR btrim(e.user_name) = '' THEN NULL
+
+  -- usuário com mapeamento de anonimização
+  WHEN um.user_name_anon IS NOT NULL THEN um.user_name_anon
+
+  -- usuário funcional / portaria / funcionário → manter nome real
+  WHEN lower(coalesce(e.user_profile, '')) IN (
+    'porteiro monitoramento',
+    'funcionário',
+    'zelador',
+    'gestor de condomínio'
+  ) THEN e.user_name
+
+  -- fallback
+  ELSE '(usuário não mapeado)'
+END AS user_name
+
+    e.user_profile,
+    e.unit_group,
+        CASE
+            WHEN e.unit IS NULL OR btrim(e.unit) = ''::text THEN NULL::text
+            WHEN e.unit = 'Apartamento 000'::text THEN e.unit
+            WHEN ua.unit_anon IS NOT NULL THEN ua.unit_anon
+            ELSE e.unit
+        END AS unit,
+    e.handler_profile,
+    e.handler_name,
+    e.treatment,
+    e.source_file
+   FROM events e
+     LEFT JOIN user_anon_map um ON um.user_name_norm = norm_text(e.user_name)
+     LEFT JOIN unit_anon_map ua ON ua.unit_group = e.unit_group AND ua.unit_real = e.unit; 

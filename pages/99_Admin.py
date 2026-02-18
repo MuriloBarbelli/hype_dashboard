@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, date, time as dtime, timedelta
 import time as pytime
 
-from src.ingest import normalize_kiper_csv, insert_events
+from src.ingest import read_kiper_csv, normalize_kiper_csv, insert_events
 from ui.sidebar import render_sidebar_menu
 from src.helpers import init_state, render_kiper_table_audit
 from src.db import (
@@ -46,10 +46,16 @@ if uploaded:
     st.info("Vou ler, normalizar e preparar os eventos antes de inserir.")
     prepared_all = []
 
+    for f in uploaded:
+        df_raw = pd.read_csv(f, sep=",")
+        df_events = normalize_kiper_csv(df_raw, source_file=f.name)
+        prepared_all.append(df_events)
+        st.write(f"Arquivo **{f.name}** → {len(df_events):,} eventos válidos")
+
     prepared = pd.concat(prepared_all, ignore_index=True) if prepared_all else pd.DataFrame()
 
     st.subheader("Prévia do que será inserido")
-    st.dataframe(prepared.head(50), use_container_width=True)
+    st.dataframe(prepared.head(50))  # sem use_container_width
 
     if st.button("Incorporar ao banco"):
       attempted = insert_events(prepared)
@@ -78,8 +84,17 @@ if uploaded:
           st.exception(e)
 
 
+
 st.info("Depois do upload, vá em **Relatórios** para consultar e filtrar os eventos.")
 
+st.divider()
+st.header("2) Manutenção")
+
+if st.button("Rebuild auditoria para TODOS os source_files"):
+    with st.spinner("Recalculando auditoria para todos os source_files…"):
+        rebuild_event_audit_map_all_sources(slack_seconds=30)
+    st.cache_data.clear()
+    st.success("Rebuild completo finalizado.")
 
 st.header("Modo de Dados")
 
@@ -283,11 +298,12 @@ else:
                 "treatment",
                 "audit_group",
                 "audit_role",
-                "audit_interpretation",
+                "passage_kind",
+                "cause_code",
+                "confianca_causa",
             ]
         ].copy()
 
         render_kiper_table_audit(df_view)
-
 
         st.caption("Navegue em páginas com **offset**. Ex.: 0, 3000, 6000…")

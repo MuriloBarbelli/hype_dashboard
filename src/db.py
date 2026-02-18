@@ -3,6 +3,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2 import OperationalError, InterfaceError, DatabaseError
 import psycopg2
+import psycopg2
 
 def _open_conn():
     conn = psycopg2.connect(
@@ -51,6 +52,10 @@ def fetch_df(sql: str, params=None):
         # timeout/statement_timeout -> NÃO retenta
         raise e
     
+    except psycopg2.errors.QueryCanceled as e:
+        # timeout/statement_timeout -> NÃO retenta
+        raise e
+    
     except (OperationalError, InterfaceError, DatabaseError):
         # se caiu DURANTE a query, tenta 1x de novo
         st.cache_resource.clear()
@@ -74,6 +79,50 @@ def fetch_distinct_values(column: str):
     """
     rows = fetch_df(sql)
     return [r["value"] for r in rows]
+
+def pick_cause_event_for_passage(events_in_window, open_event_id, open_ts, slack_seconds: int):
+    """
+    Escolhe o evento 'causa' (gatilho) para uma passagem.
+    - Procura eventos ANTES do open_ts, dentro de (slack_seconds)
+    - Prioriza tipos (facial/botoeira/comando)
+    - Fallback: o próprio OPEN (165)
+    """
+    if events_in_window is None or events_in_window.empty:
+        return {"cause_event_id": open_event_id, "cause_code": 165, "cause_desc": "PORTA ABRIU"}
+
+    # somente eventos até o open_ts e dentro da janela
+    window_start = open_ts - pd.Timedelta(seconds=slack_seconds)
+    cand = events_in_window[
+        (events_in_window["event_timestamp"] >= window_start) &
+        (events_in_window["event_timestamp"] <= open_ts)
+    ].copy()
+
+    if cand.empty:
+        return {"cause_event_id": open_event_id, "cause_code": 165, "cause_desc": "PORTA ABRIU"}
+
+    # Nunca permitir 167 como causa
+    cand = cand[cand["event_type_code"] != 167]
+    if cand.empty:
+        return {"cause_event_id": open_event_id, "cause_code": 165, "cause_desc": "PORTA ABRIU"}
+
+    # Prioridade (ajuste aqui quando você mapear os códigos reais)
+    PRIORITY = {
+        701: 1,  # exemplo: facial entrada
+        702: 1,  # exemplo: facial saída
+        177: 2,  # botoeira
+        165: 9,  # porta abriu (fallback fraco)
+    }
+    cand["prio"] = cand["event_type_code"].map(PRIORITY).fillna(5)
+
+    # critério: menor prio, e o mais próximo do open_ts (mais recente)
+    cand = cand.sort_values(["prio", "event_timestamp"], ascending=[True, False])
+
+    top = cand.iloc[0]
+    return {
+        "cause_event_id": str(top["event_id"]),
+        "cause_code": int(top["event_type_code"]),
+        "cause_desc": str(top.get("event_description") or ""),
+    }
 
 def refresh_materialized_views():
     """

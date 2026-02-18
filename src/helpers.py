@@ -699,6 +699,7 @@ def render_kiper_table_audit(df_raw: pd.DataFrame) -> None:
         gu_html += "</div>"
 
         treatment = str(r.get("treatment") or "").strip()
+        audit_html = ""
 
         # --- auditoria
         role = str(r.get("audit_role") or "UNGROUPED").upper()
@@ -723,56 +724,31 @@ def render_kiper_table_audit(df_raw: pd.DataFrame) -> None:
         if is_group_start:
             tr_class += " group-start"
 
-        interp = str(r.get("audit_interpretation") or "").strip()
-
-        role_chip = audit_role_badge(role)
-
-        audit_html = ""
-        if role_chip:
-            audit_html += role_chip
-
-        # etiqueta "interpretei como" só quando ajuda (OPEN/CAUSE) e se tiver interp
-        show_label = bool(interp) and bool(group_id) and (group_id not in shown_label_groups) and (role == "CAUSE")
-        if show_label:
+        # --- Card da passagem (somente 1x por grupo, no CAUSE) ---
+        show_card = bool(group_id) and (group_id not in shown_label_groups) and (role == "CAUSE")
+        if show_card:
             shown_label_groups.add(group_id)
 
-            lines = [ln for ln in interp.splitlines() if ln.strip()]
+            categoria_label, categoria_color, causa_label, confianca_label = format_passage_card(
+                r.get("passage_kind"),
+                r.get("cause_code"),
+                r.get("confianca_causa"),
+            )
 
-            def fmt_audit_line(ln: str) -> str:
-                low = ln.strip().lower()
+            items = (
+                f"<div><b>Categoria:</b> {html.escape(categoria_label)}</div>"
+                f"<div><b>Causa:</b> {html.escape(causa_label)}</div>"
+                f"<div><b>Confiança:</b> <span class='dot'></span>{html.escape(str(confianca_label))}</div>"
+            )
 
-                if low.startswith("confiança:"):
-                    val = ln.split(":", 1)[1].strip()
-                    vlow = val.lower()
-
-                    cls = ""
-                    if vlow.startswith("alta"):
-                        cls = "high"
-                    elif vlow.startswith("média") or vlow.startswith("media"):
-                        cls = "med"
-                    elif vlow.startswith("baixa"):
-                        cls = "low"
-
-                    dot = f"<span class='dot {cls}'></span>" if cls else "<span class='dot'></span>"
-                    return f"<div><b>Confiança:</b> {dot}{html.escape(val)}</div>"
-
-                if low.startswith("categoria:"):
-                    return f"<div><b>Categoria:</b> {html.escape(ln.split(':',1)[1].strip())}</div>"
-                if low.startswith("causa:"):
-                    return f"<div><b>Causa:</b> {html.escape(ln.split(':',1)[1].strip())}</div>"
-
-                return f"<div>{html.escape(ln)}</div>"
-
-            items = "".join(fmt_audit_line(ln) for ln in lines)
-
-            # linha extra “full width”
             rows_html.append(
                 f"<tr style='{tr_style}'>"
                 f"<td colspan='5' style='padding: 0 14px 10px 14px;'>"
-                f"<div class='audit-banner'>{items}</div>"
+                f"<div class='audit-banner' style='background:{categoria_color};'>{items}</div>"
                 f"</td>"
                 f"</tr>"
             )
+
 
 
         # Se não agrupado, coloca nota curta pra facilitar caça de gaps
@@ -824,3 +800,59 @@ def render_kiper_table_audit(df_raw: pd.DataFrame) -> None:
     </html>
     """
     components.html(table_html, height=800, scrolling=True)
+
+def format_passage_card(passage_kind, cause_code, confianca=None):
+    """
+    Formata strings e cor do card da auditoria.
+    Mantém passage_kind técnico no banco, mas exibe texto amigável.
+    """
+
+    # Normaliza code
+    try:
+        code = int(cause_code) if cause_code is not None and str(cause_code).strip() != "" else None
+    except Exception:
+        code = None
+
+    # ✅ fallback inteligente (quando passage_kind vier vazio/nulo)
+    # - 311 (app) = entrada identificada (responsabiliza morador)
+    # - 177 (botoeira) = saída sem identificação
+    # - 370 (base/portaria) = entrada sem identificação
+    # - facial/biometria = entrada identificada
+    if not passage_kind:
+        if code in (177,):
+            passage_kind = "saida_sem_id"
+        elif code in (701, 708, 703, 257, 311):
+            passage_kind = "entrada_id"
+        elif code in (370,):
+            passage_kind = "entrada_sem_id"
+
+    # Categoria amigável + cor
+    if passage_kind == "entrada_id":
+        categoria_label = "Entrada (identificada)"
+        categoria_color = "#E6F4EA"  # verde claro
+    elif passage_kind == "entrada_sem_id":
+        categoria_label = "Entrada (sem identificação)"
+        categoria_color = "#FFF4E5"  # laranja claro
+    elif passage_kind == "saida_sem_id":
+        categoria_label = "Saída (sem identificação)"
+        categoria_color = "#FDECEC"  # vermelho claro
+    else:
+        categoria_label = "Passagem"
+        categoria_color = "#F0F2F6"  # neutro
+
+    # Causa amigável
+    cause_map = {
+        701: "Reconhecimento facial (morador)",
+        708: "Reconhecimento facial (convidado)",
+        703: "Reconhecimento facial (não cadastrado)",
+        257: "Biometria (não cadastrada)",
+        177: "Botoeira de saída",
+        311: "Abertura via aplicativo",
+        370: "Abertura pela portaria (base)",
+    }
+    causa_label = cause_map.get(code, f"Código {code}" if code is not None else "—")
+
+    confianca_label = confianca if confianca not in (None, "", "NULL") else "—"
+
+    return categoria_label, categoria_color, causa_label, confianca_label
+
