@@ -46,12 +46,6 @@ if uploaded:
     st.info("Vou ler, normalizar e preparar os eventos antes de inserir.")
     prepared_all = []
 
-    for f in uploaded:
-        df_raw = pd.read_csv(f, sep=",")
-        df_events = normalize_kiper_csv(df_raw, source_file=f.name)
-        prepared_all.append(df_events)
-        st.write(f"Arquivo **{f.name}** → {len(df_events):,} eventos válidos")
-
     prepared = pd.concat(prepared_all, ignore_index=True) if prepared_all else pd.DataFrame()
 
     st.subheader("Prévia do que será inserido")
@@ -62,13 +56,19 @@ if uploaded:
 
       try:
           with st.spinner("Preparando banco (índices) + atualizando visões + gerando cache da auditoria…"):
-              ensure_db_objects()
-              refresh_materialized_views()
+            ensure_db_objects()
+            refresh_materialized_views()
 
-              # build incremental por source_file que REALMENTE foi inserido
-              source_files = sorted(set(prepared["source_file"].dropna().astype(str).tolist()))
-              for sf in source_files:
-                  build_event_audit_map_for_source_file(sf, slack_seconds=30)
+            # build incremental por source_file que REALMENTE foi inserido
+            source_files = sorted(set(prepared["source_file"].dropna().astype(str).tolist()))
+
+            for sf in source_files:
+                try:
+                    build_event_audit_map_for_source_file(sf, slack_seconds=30)
+                except Exception as e:
+                    st.warning(f"Falhou ao gerar auditoria para {sf}")
+                    st.exception(e)
+
 
           st.cache_data.clear()
           st.success(f"Ingestão concluída! {attempted:,} linhas processadas, visões atualizadas e auditoria pronta.")

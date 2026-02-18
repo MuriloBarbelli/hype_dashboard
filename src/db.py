@@ -140,127 +140,139 @@ def build_event_audit_map_for_source_file(source_file: str, slack_seconds: int =
     Calcula/atualiza o cache de auditoria SOMENTE para os eventos de um source_file.
     Roda depois do INSERT + refresh das MVs.
     """
-    sql = f"""
-    with e as (
-    select
-        event_id,
-        event_timestamp,
-        event_type_code,
-        event_description,
-        access_name,
-        user_name,
-        user_profile,
-        unit,
-        unit_group,
-        handler_name,
-        handler_profile,
-        treatment,
-        source_file
-    from public.events
-    where source_file = %(source_file)s
-    ),
-    bounds as (
+    sql = """
+    with bounds as (
     select
         min(event_timestamp) as min_ts,
         max(event_timestamp) as max_ts
-    from e
+    from public.events
+    where source_file = %(source_file)s
     ),
-    p as (
-    -- base de passagens (com close_event_id) + classificação (passage_kind/cause)
-    select
-        p0.open_event_id,
-        p0.open_ts,
-        p0.close_event_id,
-        p0.close_ts,
-        p0.seconds_open,
-        p0.door_access_name,
 
+    -- passagens "cruas" (tem close_event_id)
+    p_base as (
+    select
+        p.open_event_id,
+        p.open_ts,
+        p.close_ts,
+        p.close_event_id,
+        p.seconds_open,
+        p.door_access_name
+    from public.mv_passages_v5 p
+    join bounds b on true
+    where p.open_ts >= (b.min_ts - (%(slack)s || ' seconds')::interval)
+        and p.open_ts <= (b.max_ts + (%(slack)s || ' seconds')::interval)
+    ),
+
+    -- classificação (tem passage_kind / causa / confiança etc)
+    p_class as (
+    select
+        c.open_event_id,
         c.cause_event_id,
+        c.cause_ts,
         c.cause_code,
+        c.cause_desc,
+        c.user_name,
+        c.user_profile,
+        c.unit,
+        c.unit_group,
+        c.handler_name,
+        c.handler_profile,
+        c.has_held_open,
+        c.has_failed_close,
+        c.has_door_alert,
         c.passage_kind,
         c.confianca_causa
-    from public.mv_passages_v5 p0
-    left join public.vw_passage_classification_v5 c
-        on c.open_event_id = p0.open_event_id
-
-    where
-        -- limita passagens ao intervalo do arquivo pra performance
-        p0.open_ts >= (select min_ts from bounds) - interval '2 hours'
-        and p0.open_ts <= (select max_ts from bounds) + interval '2 hours'
-        and p0.door_access_name in (select distinct access_name from e)
+    from public.vw_passage_classification_v5 c
+    join bounds b on true
+    where c.open_ts >= (b.min_ts - (%(slack)s || ' seconds')::interval)
+        and c.open_ts <= (b.max_ts + (%(slack)s || ' seconds')::interval)
     ),
-    matched as (
+
+    -- junta base + classificação
+    p as (
+    select
+        pb.open_event_id,
+        pb.open_ts,
+        pb.close_ts,
+        pb.close_event_id,
+        pb.seconds_open,
+        pb.door_access_name,
+        pc.cause_event_id,
+        pc.cause_ts,
+        pc.cause_code,
+        pc.cause_desc,
+        pc.user_name,
+        pc.user_profile,
+        pc.unit,
+        pc.unit_group,
+        pc.handler_name,
+        pc.handler_profile,
+        pc.has_held_open,
+        pc.has_failed_close,
+        pc.has_door_alert,
+        pc.passage_kind,
+        pc.confianca_causa
+    from p_base pb
+    left join p_class pc using (open_event_id)
+    ),
+
+    e as (
+    select
+        event_id,
+        event_timestamp,
+        access_name
+    from public.events
+    where source_file = %(source_file)s
+    ),
+
+    candidates as (
     select
         e.event_id,
+        p.open_event_id as audit_group,
+        p.open_ts as matched_open_ts,
+        p.close_ts as matched_close_ts,
+        p.door_access_name as matched_door_access_name,
+        p.cause_event_id,
+        p.cause_code,
+        p.confianca_causa,
+        p.passage_kind
+    from e
+    join p
+        on e.access_name = p.door_access_name
+    and e.event_timestamp >= (p.open_ts  - (%(slack)s || ' seconds')::interval)
+    and e.event_timestamp <= (p.close_ts + (%(slack)s || ' seconds')::interval)
+    ),
 
-        m.open_event_id as audit_group,
-        m.open_ts      as matched_open_ts,
-        m.close_ts     as matched_close_ts,
-        m.door_access_name as matched_door_access_name,
+    best as (
+    select distinct on (event_id)
+        *
+    from candidates
+    order by event_id,
+            abs(extract(epoch from (matched_open_ts - (select event_timestamp from public.events ee where ee.event_id=candidates.event_id))))
+    ),
 
+    final as (
+    select
+        e.event_id,
+        b.audit_group,
+        b.matched_open_ts,
+        b.matched_close_ts,
+        b.matched_door_access_name,
         case
-        when m.open_event_id is null then 'UNGROUPED'
-        when e.event_id = m.open_event_id then 'OPEN'
-        when e.event_id = m.cause_event_id then 'CAUSE'
-        when e.event_id = m.close_event_id then 'CLOSE'
+        when b.audit_group is null then 'UNGROUPED'
+        when e.event_id = b.audit_group then 'OPEN'
+        when e.event_id = (select close_event_id from public.mv_passages_v5 pp where pp.open_event_id=b.audit_group limit 1) then 'CLOSE'
+        when e.event_id = b.cause_event_id then 'CAUSE'
         else 'IN_GROUP'
         end as audit_role,
-
-        case
-        when m.open_event_id is null then null
-        else (
-            'Categoria: ' ||
-            (case m.passage_kind
-            when 'entrada_facial' then 'Entrada (Facial)'
-            when 'saida_botoeira' then 'Saída (Botoeira)'
-            when 'entrada_botoeira' then 'Entrada (Botoeira)'
-            when 'saida_facial' then 'Saída (Facial)'
-            when 'entrada_sem_id' then 'Entrada (Sem identificação)'
-            when 'saida_sem_id' then 'Saída (Sem identificação)'
-            else coalesce(m.passage_kind, '—')
-            end)
-            || E'\\nCausa: ' ||
-            (case m.cause_code
-            when 701 then 'Reconhecimento facial'
-            when 177 then 'Botoeira de saída'
-            when 370 then 'Abrir porta (base)'
-            when 165 then 'Porta abriu'
-            when 167 then 'Porta fechou'
-            else ('Código ' || coalesce(m.cause_code::text,'—'))
-            end)
-            || E'\\nConfiança: ' ||
-            (case lower(coalesce(m.confianca_causa,''))
-            when 'alta' then 'Alta'
-            when 'media' then 'Média'
-            when 'baixa' then 'Baixa'
-            else '—'
-            end)
-        )
-        end as audit_interpretation,
-
-        case
-        when m.open_event_id is null then null
-        else (
-            80
-            - (case when lower(coalesce(m.confianca_causa,''))='media' then 15 else 0 end)
-            - (case when lower(coalesce(m.confianca_causa,''))='baixa' then 30 else 0 end)
-            - (case when coalesce(m.close_ts, m.open_ts) is null then 10 else 0 end)
-            - (case when coalesce(m.seconds_open,0) >= 30 then 10 else 0 end)
-            - (case when coalesce(m.seconds_open,0) >= 120 then 20 else 0 end)
-        )
-        end as audit_score
+        b.passage_kind,
+        b.cause_code,
+        b.confianca_causa
     from e
-    left join lateral (
-        select *
-        from p
-        where p.door_access_name = e.access_name
-        and e.event_timestamp >= (p.open_ts  - ( %(slack)s || ' seconds')::interval)
-        and e.event_timestamp <= (p.close_ts + ( %(slack)s || ' seconds')::interval)
-        -- REGRA CERTA: pega a passagem mais recente cujo intervalo contém o evento
-        order by p.open_ts desc
-        limit 1
-    ) m on true
+    left join best b on b.event_id = e.event_id
     )
+
     insert into public.event_audit_map (
     event_id,
     audit_group,
@@ -268,8 +280,9 @@ def build_event_audit_map_for_source_file(source_file: str, slack_seconds: int =
     matched_close_ts,
     matched_door_access_name,
     audit_role,
-    audit_interpretation,
-    audit_score,
+    passage_kind,
+    cause_code,
+    confianca_causa,
     computed_at
     )
     select
@@ -279,22 +292,23 @@ def build_event_audit_map_for_source_file(source_file: str, slack_seconds: int =
     matched_close_ts,
     matched_door_access_name,
     audit_role,
-    audit_interpretation,
-    audit_score,
+    passage_kind,
+    cause_code,
+    confianca_causa,
     now()
-    from matched
-    where audit_group is not null
+    from final
+    where event_id is not null
     on conflict (event_id) do update set
     audit_group = excluded.audit_group,
     matched_open_ts = excluded.matched_open_ts,
     matched_close_ts = excluded.matched_close_ts,
     matched_door_access_name = excluded.matched_door_access_name,
     audit_role = excluded.audit_role,
-    audit_interpretation = excluded.audit_interpretation,
-    audit_score = excluded.audit_score,
+    passage_kind = excluded.passage_kind,
+    cause_code = excluded.cause_code,
+    confianca_causa = excluded.confianca_causa,
     computed_at = excluded.computed_at;
     """
-
 
     conn = get_conn()
     conn = _ensure_conn_alive(conn)
@@ -321,6 +335,23 @@ def rebuild_event_audit_map_all_sources(slack_seconds: int = 30):
     Não apaga nada: é UPSERT (on conflict do update).
     """
     source_files = fetch_distinct_source_files()
+    for sf in source_files:
+        build_event_audit_map_for_source_file(sf, slack_seconds=slack_seconds)
+
+    return len(source_files)
+
+def rebuild_event_audit_map_all_source_files(slack_seconds=30):
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            select distinct source_file
+            from public.events
+            where source_file is not null and btrim(source_file) <> ''
+            order by 1;
+        """)
+        rows = cur.fetchall()
+    source_files = [r["source_file"] for r in rows]
+
     for sf in source_files:
         build_event_audit_map_for_source_file(sf, slack_seconds=slack_seconds)
 
