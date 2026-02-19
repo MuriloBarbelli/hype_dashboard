@@ -156,38 +156,43 @@ def fetch_audit_events_with_passage(
     #.  SEMPRE USAR vw
     sql = f"""
     select
-      e.event_id,
-      e.event_timestamp,
-      e.event_type_code,
-      e.event_description,
-      e.access_name,
-      e.user_name,
-      e.user_profile,
-      e.unit,
-      e.handler_name,
-      e.handler_profile,
-      e.treatment,
+    e.event_id,
+    e.event_timestamp,
+    e.event_type_code,
+    e.event_description,
+    e.access_name,
+    e.user_name,
+    e.user_profile,
+    e.unit_group,
+    e.unit,
+    e.handler_name,
+    e.handler_profile,
+    e.treatment,
 
-      a.audit_group,
-      coalesce(a.audit_role, 'UNGROUPED') as audit_role,
-      a.audit_interpretation,
-      a.audit_score
+    a.audit_group,
+    coalesce(a.audit_role, 'UNGROUPED') as audit_role,
+
+    -- ✅ colunas que o renderer da auditoria precisa
+    a.passage_kind,
+    a.cause_code,
+    a.confianca_causa
 
     from public.events e
     left join public.event_audit_map a
-      on a.event_id = e.event_id
+    on a.event_id = e.event_id
 
     where e.event_timestamp >= %(start)s
-      and e.event_timestamp <= %(end)s
-      and (%(door)s = '' or e.access_name ilike ('%%' || %(door)s || '%%'))
+    and e.event_timestamp <= %(end)s
+    and (%(door)s = '' or e.access_name ilike ('%%' || %(door)s || '%%'))
 
-      and (%(show_ungrouped)s = true or coalesce(a.audit_role,'UNGROUPED') <> 'UNGROUPED')
-      and (%(only_suspicious)s = false or (a.audit_score is not null and a.audit_score <= 60))
+    and (%(show_ungrouped)s = true or coalesce(a.audit_role,'UNGROUPED') <> 'UNGROUPED')
+    and (%(only_suspicious)s = false or (a.audit_score is not null and a.audit_score <= 60))
 
     order by e.event_timestamp asc
     limit %(limit)s
     offset %(offset)s;
     """
+
 
 
     return pd.DataFrame(fetch_df(sql, params))
@@ -274,9 +279,14 @@ else:
         dfe2 = dfe.copy()
 
         # garante colunas que podem não existir dependendo da fonte (events vs vw_events_anon)
-        for col in ["user_name", "user_profile", "unit_group", "unit", "treatment"]:
+        for col in [
+            "user_name", "user_profile", "unit_group", "unit", "treatment",
+            "audit_group", "audit_role",
+            "passage_kind", "cause_code", "confianca_causa",
+        ]:
             if col not in dfe2.columns:
-                dfe2[col] = ""
+                dfe2[col] = None
+
 
         dfe2["descricao"] = (
             dfe2["event_type_code"].astype(str)

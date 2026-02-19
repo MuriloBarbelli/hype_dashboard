@@ -4,7 +4,7 @@ PAGES = {
     "Contexto do Projeto": "pages/0_Contexto_do_Projeto.py",
     "Relatórios": "pages/1_Relatorios.py",
     "Visão geral": "pages/2_Visao_Geral.py",
-    "Portas (Em Breve)": "pages/3_Portas.py",
+    "Portas": "pages/3_Portas.py",
     "Usuários (Em Breve)": "pages/4_Usuarios.py",
     "Admin": "pages/99_Admin.py",
 }

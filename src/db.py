@@ -131,6 +131,8 @@ def refresh_materialized_views():
     """
     sql = """
     refresh materialized view public.mv_passages_v5;
+    refresh materialized view public.mv_passages_v6;
+
     refresh materialized view public.mv_passage_classification_v5;
     """
     conn = get_conn()
@@ -169,6 +171,17 @@ def ensure_db_objects():
     create index if not exists idx_mv_passages_access_open_close
     on public.mv_passage_classification_v5 (door_access_name, open_ts, close_ts);
 
+    -- =========================================================
+    -- MATERIALIZED VIEW: mv_passages_v6 (PORTAS)
+    -- =========================================================
+    create index if not exists idx_mv_passages_v6_open_ts
+    on public.mv_passages_v6 (open_ts);
+
+    create index if not exists idx_mv_passages_v6_door_open
+    on public.mv_passages_v6 (door_access_name, open_ts);
+
+    create index if not exists idx_mv_passages_v6_seconds
+    on public.mv_passages_v6 (seconds_open);
 
     -- (opcional, mas ajuda muito quando você filtra por open_event_id)
     create index if not exists idx_mv_passages_open_event_id
