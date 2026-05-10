@@ -1,108 +1,26 @@
 import os
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date, time as dtime, timedelta
+from datetime import datetime, date, time as dtime
 import time as pytime
 
-from src.ingest import read_kiper_csv, normalize_kiper_csv, insert_events
 from ui.sidebar import render_sidebar_menu
 from src.helpers import init_state, render_kiper_table_audit
-from src.db import (
-    refresh_materialized_views,
-    fetch_df,
-    ensure_db_objects,
-    build_event_audit_map_for_source_file,
-    rebuild_event_audit_map_all_sources,
-)
-
-
-
+from src.db import fetch_df, rebuild_event_audit_map_all_sources
 
 init_state()
 
+st.set_page_config(page_title="Admin • Hype", layout="wide")
 st.session_state["current_page"] = "Admin"
 render_sidebar_menu()
 
+st.title("Admin")
+
 # ============================================================
-# Upload
+# 1) Modo de Dados
 # ============================================================
 
-st.header("1) Upload de CSV (Kiper)")
-st.caption(
-    "O fluxo normal de ingestão é automático via **GitHub Actions** (diariamente às 06:00 UTC). "
-    "Use este upload apenas como **emergência**: dias que a API do Kiper falhou repetidamente "
-    "e você baixou o CSV manualmente."
-)
-
-uploaded = st.file_uploader(
-    "Envie um ou mais CSVs exportados do Kiper",
-    type=["csv"],
-    accept_multiple_files=True
-)
-
-if uploaded:
-    st.info("Vou ler, normalizar e preparar os eventos antes de inserir.")
-    prepared_all = []
-
-    for f in uploaded:
-        df_raw = pd.read_csv(f, sep=",")
-        df_events = normalize_kiper_csv(df_raw, source_file=f.name)
-        prepared_all.append(df_events)
-        st.write(f"Arquivo **{f.name}** → {len(df_events):,} eventos válidos")
-
-    prepared = pd.concat(prepared_all, ignore_index=True) if prepared_all else pd.DataFrame()
-
-    st.subheader("Prévia do que será inserido")
-    st.dataframe(prepared.head(50))  # sem use_container_width
-
-    if st.button("Incorporar ao banco"):
-      attempted = insert_events(prepared)
-
-      try:
-          with st.spinner("Preparando banco (índices) + atualizando visões + gerando cache da auditoria…"):
-            ensure_db_objects()
-            refresh_materialized_views()
-
-            # build incremental por source_file que REALMENTE foi inserido
-            source_files = sorted(set(prepared["source_file"].dropna().astype(str).tolist()))
-
-            for sf in source_files:
-                try:
-                    build_event_audit_map_for_source_file(sf, slack_seconds=30)
-                except Exception as e:
-                    st.warning(f"Falhou ao gerar auditoria para {sf}")
-                    st.exception(e)
-
-
-          st.cache_data.clear()
-          st.success(f"Ingestão concluída! {attempted:,} linhas processadas, visões atualizadas e auditoria pronta.")
-
-      except Exception as e:
-          st.warning("Ingestão feita, mas falhou ao atualizar visões / cache.")
-          st.exception(e)
-
-
-
-st.info("Depois do upload, vá em **Relatórios** para consultar e filtrar os eventos.")
-
-st.divider()
-st.header("2) Manutenção")
-
-if st.button("Inicializar banco (ensure_db_objects)"):
-    try:
-        with st.spinner("Criando índices e objetos necessários…"):
-            ensure_db_objects()
-        st.success("Banco inicializado.")
-    except Exception as e:
-        st.error(f"Falhou: {e}")
-
-if st.button("Rebuild auditoria para TODOS os source_files"):
-    with st.spinner("Recalculando auditoria para todos os source_files…"):
-        rebuild_event_audit_map_all_sources(slack_seconds=30)
-    st.cache_data.clear()
-    st.success("Rebuild completo finalizado.")
-
-st.header("3) Modo de Dados")
+st.header("1) Modo de Dados")
 
 admin_pwd = (os.environ.get("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD", "")).strip()
 entered = st.text_input("Senha do Admin", type="password").strip()
@@ -125,15 +43,14 @@ with col2:
         st.session_state["data_mode"] = "anon"
         st.info("Modo ANÔNIMO ativado.")
 
-st.caption(f"Modo atual: **{st.session_state.get('data_mode','anon').upper()}**")
+st.caption(f"Modo atual: **{st.session_state.get('data_mode', 'anon').upper()}**")
 
 # ============================================================
-# Auditoria de Passagens (v5) — Admin only
+# 2) Auditoria de Passagens
 # ============================================================
 
 @st.cache_data(ttl=60)
 def fetch_audit_events_with_passage(
-    src: str,
     start_dt: datetime,
     end_dt: datetime,
     door_contains: str,
@@ -154,7 +71,7 @@ def fetch_audit_events_with_passage(
         "show_ungrouped": show_ungrouped,
     }
 
-    sql = f"""
+    sql = """
     select
     e.event_id,
     e.event_timestamp,
@@ -172,7 +89,6 @@ def fetch_audit_events_with_passage(
     a.audit_group,
     coalesce(a.audit_role, 'UNGROUPED') as audit_role,
 
-    -- ✅ colunas que o renderer da auditoria precisa
     a.passage_kind,
     a.cause_code,
     a.confianca_causa
@@ -193,23 +109,17 @@ def fetch_audit_events_with_passage(
     offset %(offset)s;
     """
 
-
-
     return pd.DataFrame(fetch_df(sql, params))
 
 
 st.divider()
-st.header("4) Auditoria de Passagens")
+st.header("2) Auditoria de Passagens")
 st.caption("Leitura em formato log (Kiper) + anotações do interpretador. Use sempre 1 dia por vez.")
 
-# ---- gate admin (se já tiver no seu arquivo, mantém; se não, usa isso)
 is_admin_ok = bool(admin_pwd) and (entered == admin_pwd)
 if not is_admin_ok:
     st.info("🔒 Para acessar a auditoria, digite a **Senha do Admin** acima.")
 else:
-    # -----------------------------
-    # Filtro próprio (1 dia)
-    # -----------------------------
     with st.expander("Filtros (Auditoria)", expanded=True):
         c1, c2, c3, c4 = st.columns([1.2, 1.0, 1.0, 1.2], vertical_alignment="bottom")
         with c1:
@@ -235,24 +145,18 @@ else:
         with c9:
             only_suspicious_groups = st.checkbox("Só grupos suspeitos", value=False)
         with c10:
-            
             run = st.button("Carregar", type="primary")
 
     if not run:
         st.info("Selecione o dia e o horário e clique em **Carregar**.")
     else:
-        # janela datetime
         start_dt = datetime.combine(audit_day, audit_start)
         end_dt = datetime.combine(audit_day, audit_end)
 
         t0 = pytime.time()
 
-        # -----------------------------
-        # 1) Busca eventos brutos (paginado)
-        # -----------------------------
-        with st.spinner("Carregando auditoria (1 query, sem loops)…"):
+        with st.spinner("Carregando auditoria…"):
             dfe = fetch_audit_events_with_passage(
-                src=src,
                 start_dt=start_dt,
                 end_dt=end_dt,
                 door_contains=door_contains,
@@ -272,10 +176,8 @@ else:
         dt = pytime.time() - t0
         st.success(f"OK — {len(dfe):,} eventos exibidos (limit/offset). Tempo: {dt:.1f}s")
 
-        # --- monta a coluna "descricao" no mesmo padrão da página Relatórios
         dfe2 = dfe.copy()
 
-        # garante colunas que podem não existir dependendo da fonte (events vs vw_events_anon)
         for col in [
             "user_name", "user_profile", "unit_group", "unit", "treatment",
             "audit_group", "audit_role",
@@ -284,7 +186,6 @@ else:
             if col not in dfe2.columns:
                 dfe2[col] = None
 
-
         dfe2["descricao"] = (
             dfe2["event_type_code"].astype(str)
             + " - "
@@ -292,25 +193,32 @@ else:
             + "\n"
             + dfe2["access_name"].fillna("").astype(str)
         )
-        
-        # df no formato que o renderer Kiper espera (+ audit cols)
-        df_view = dfe2[
-            [
-                "event_timestamp",
-                "descricao",
-                "user_name",
-                "user_profile",
-                "unit_group",
-                "unit",
-                "treatment",
-                "audit_group",
-                "audit_role",
-                "passage_kind",
-                "cause_code",
-                "confianca_causa",
-            ]
-        ].copy()
+
+        df_view = dfe2[[
+            "event_timestamp", "descricao",
+            "user_name", "user_profile", "unit_group", "unit", "treatment",
+            "audit_group", "audit_role",
+            "passage_kind", "cause_code", "confianca_causa",
+        ]].copy()
 
         render_kiper_table_audit(df_view)
 
         st.caption("Navegue em páginas com **offset**. Ex.: 0, 3000, 6000…")
+
+# ============================================================
+# 3) Ferramentas de Manutenção
+# ============================================================
+
+st.divider()
+with st.expander("Ferramentas de Manutenção", expanded=False):
+    st.caption(
+        "Use **Rebuild auditoria** se a lógica de classificação de passagens foi alterada no código "
+        "e você quiser que o histórico inteiro reflita as novas regras — ou se a tabela de auditoria "
+        "ficar dessincronizada por algum motivo. "
+        "Em operação normal (GitHub Actions funcionando) você nunca precisará clicar aqui."
+    )
+    if st.button("Rebuild auditoria para TODOS os source_files"):
+        with st.spinner("Recalculando auditoria para todos os source_files…"):
+            rebuild_event_audit_map_all_sources(slack_seconds=30)
+        st.cache_data.clear()
+        st.success("Rebuild completo finalizado.")
