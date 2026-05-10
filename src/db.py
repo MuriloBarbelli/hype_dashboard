@@ -150,32 +150,15 @@ def ensure_db_objects():
     """
     sql = """
     -- =========================================================
-    -- EVENTS (tabela base)
-    -- =========================================================
-    create index if not exists idx_events_timestamp
-    on public.events (event_timestamp);
-
-    create index if not exists idx_events_access_ts
-    on public.events (access_name, event_timestamp);
-
-    -- =========================================================
     -- MATERIALIZED VIEW: mv_passage_classification_v5
-    -- (essa é a que costuma deixar a auditoria lenta)
     -- =========================================================
+    -- Bitmap Index Scan primário em filtros de período (usado pelo planner)
     create index if not exists idx_mv_passages_open_ts
     on public.mv_passage_classification_v5 (open_ts);
 
-    create index if not exists idx_mv_passages_access_open
-    on public.mv_passage_classification_v5 (door_access_name, open_ts);
-
+    -- Cobre queries com filtro simultâneo por porta + período + close_ts
     create index if not exists idx_mv_passages_access_open_close
     on public.mv_passage_classification_v5 (door_access_name, open_ts, close_ts);
-
-    -- =========================================================
-    -- EVENTS (melhora busca por door + tipo + timestamp)
-    -- =========================================================
-    create index if not exists idx_events_access_code_ts
-    on public.events (access_name, event_type_code, event_timestamp);
 
     -- =========================================================
     -- MATERIALIZED VIEW: mv_passages_v6 (PORTAS)
@@ -188,10 +171,6 @@ def ensure_db_objects():
 
     create index if not exists idx_mv_passages_v6_seconds
     on public.mv_passages_v6 (seconds_open);
-
-    -- (opcional, mas ajuda muito quando você filtra por open_event_id)
-    create index if not exists idx_mv_passages_open_event_id
-    on public.mv_passage_classification_v5 (open_event_id);
     """
 
     conn = get_conn()
