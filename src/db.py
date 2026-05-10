@@ -364,6 +364,7 @@ def build_event_audit_map_for_source_file(source_file: str, slack_seconds: int =
         _conn = get_conn()
         _conn = _ensure_conn_alive(_conn)
     with _conn.cursor() as cur:
+        cur.execute("SET statement_timeout = 0")
         cur.execute(sql, {"source_file": source_file, "slack": int(slack_seconds)})
     try:
         _conn.commit()
