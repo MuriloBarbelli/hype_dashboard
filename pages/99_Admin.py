@@ -20,13 +20,6 @@ from src.db import (
 
 init_state()
 
-# garante que o banco está pronto mesmo antes de ingestir algo
-try:
-    ensure_db_objects()
-except Exception:
-    # não quebra a página se estiver offline / sem credencial
-    pass
-
 st.session_state["current_page"] = "Admin"
 render_sidebar_menu()
 
@@ -35,6 +28,11 @@ render_sidebar_menu()
 # ============================================================
 
 st.header("1) Upload de CSV (Kiper)")
+st.caption(
+    "O fluxo normal de ingestão é automático via **GitHub Actions** (diariamente às 06:00 UTC). "
+    "Use este upload apenas como **emergência**: dias que a API do Kiper falhou repetidamente "
+    "e você baixou o CSV manualmente."
+)
 
 uploaded = st.file_uploader(
     "Envie um ou mais CSVs exportados do Kiper",
@@ -90,13 +88,21 @@ st.info("Depois do upload, vá em **Relatórios** para consultar e filtrar os ev
 st.divider()
 st.header("2) Manutenção")
 
+if st.button("Inicializar banco (ensure_db_objects)"):
+    try:
+        with st.spinner("Criando índices e objetos necessários…"):
+            ensure_db_objects()
+        st.success("Banco inicializado.")
+    except Exception as e:
+        st.error(f"Falhou: {e}")
+
 if st.button("Rebuild auditoria para TODOS os source_files"):
     with st.spinner("Recalculando auditoria para todos os source_files…"):
         rebuild_event_audit_map_all_sources(slack_seconds=30)
     st.cache_data.clear()
     st.success("Rebuild completo finalizado.")
 
-st.header("Modo de Dados")
+st.header("3) Modo de Dados")
 
 admin_pwd = (os.environ.get("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD", "")).strip()
 entered = st.text_input("Senha do Admin", type="password").strip()
@@ -148,12 +154,6 @@ def fetch_audit_events_with_passage(
         "show_ungrouped": show_ungrouped,
     }
 
-    # ⚠️ Ajuste importante:
-    # - Passagens vêm da view (vw_passage...) mas performance real vem da MV (mv_passage...)
-    # - Mantive vw_passage_classification_v5 porque é o que você já está usando.
-    #   Se você confirmar que existe mv_passage_classification_v5 com mesmos campos,
-    #   trocamos p/ mv para ficar ainda mais rápido.
-    #.  SEMPRE USAR vw
     sql = f"""
     select
     e.event_id,
@@ -199,7 +199,7 @@ def fetch_audit_events_with_passage(
 
 
 st.divider()
-st.header("2) Auditoria de Passagens")
+st.header("4) Auditoria de Passagens")
 st.caption("Leitura em formato log (Kiper) + anotações do interpretador. Use sempre 1 dia por vez.")
 
 # ---- gate admin (se já tiver no seu arquivo, mantém; se não, usa isso)
@@ -244,9 +244,6 @@ else:
         # janela datetime
         start_dt = datetime.combine(audit_day, audit_start)
         end_dt = datetime.combine(audit_day, audit_end)
-
-        # fonte de eventos conforme modo
-        src = "public.events" if st.session_state.get("data_mode") == "real" else "public.vw_events_anon"
 
         t0 = pytime.time()
 
