@@ -182,10 +182,12 @@ def ensure_db_objects():
     except Exception:
         pass
 
-def build_event_audit_map_for_source_file(source_file: str, slack_seconds: int = 30):
+def build_event_audit_map_for_source_file(source_file: str, slack_seconds: int = 30, conn=None):
     """
     Calcula/atualiza o cache de auditoria SOMENTE para os eventos de um source_file.
     Roda depois do INSERT + refresh das MVs.
+    conn: se None, usa a conexão cacheada do Streamlit; se fornecida, usa diretamente
+    (permite chamar do extrator CLI sem contexto Streamlit).
     """
     sql = """
     with bounds as (
@@ -357,12 +359,14 @@ def build_event_audit_map_for_source_file(source_file: str, slack_seconds: int =
     computed_at = excluded.computed_at;
     """
 
-    conn = get_conn()
-    conn = _ensure_conn_alive(conn)
-    with conn.cursor() as cur:
+    _conn = conn
+    if _conn is None:
+        _conn = get_conn()
+        _conn = _ensure_conn_alive(_conn)
+    with _conn.cursor() as cur:
         cur.execute(sql, {"source_file": source_file, "slack": int(slack_seconds)})
     try:
-        conn.commit()
+        _conn.commit()
     except Exception:
         pass
 

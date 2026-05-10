@@ -39,6 +39,7 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
 from src.ingest import normalize_kiper_csv, read_kiper_csv  # noqa: E402
+from src.db import build_event_audit_map_for_source_file   # noqa: E402
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constantes
@@ -412,6 +413,13 @@ def run(start: date, end: date, days_override: list = None) -> None:
         log.info("Atualizando materialized views…")
         _refresh_views(conn)
         log.info("Views atualizadas.")
+
+        # ── 5. Rebuild do event_audit_map ──────────────────────────────────
+        log.info("Atualizando event_audit_map…")
+        for csv_path in new_files:
+            log.info("  audit map: %s", csv_path.name)
+            build_event_audit_map_for_source_file(csv_path.name, conn=conn)
+        log.info("Event_audit_map atualizado.")
 
     finally:
         conn.close()
