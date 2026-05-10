@@ -172,6 +172,12 @@ def ensure_db_objects():
     on public.mv_passage_classification_v5 (door_access_name, open_ts, close_ts);
 
     -- =========================================================
+    -- EVENTS (melhora busca por door + tipo + timestamp)
+    -- =========================================================
+    create index if not exists idx_events_access_code_ts
+    on public.events (access_name, event_type_code, event_timestamp);
+
+    -- =========================================================
     -- MATERIALIZED VIEW: mv_passages_v6 (PORTAS)
     -- =========================================================
     create index if not exists idx_mv_passages_v6_open_ts

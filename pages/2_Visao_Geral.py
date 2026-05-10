@@ -65,11 +65,15 @@ def fetch_event_type_options():
 @st.cache_data(ttl=300)
 def fetch_view_columns(view_schema: str, view_name: str) -> list[str]:
     sql = """
-    select column_name
-    from information_schema.columns
-    where table_schema = %(schema)s
-      and table_name = %(name)s
-    order by ordinal_position;
+    select attname as column_name
+    from pg_attribute
+    join pg_class on pg_attribute.attrelid = pg_class.oid
+    join pg_namespace on pg_class.relnamespace = pg_namespace.oid
+    where pg_namespace.nspname = %(schema)s
+      and pg_class.relname = %(name)s
+      and attnum > 0
+      and not attisdropped
+    order by attnum;
     """
     rows = fetch_df(sql, {"schema": view_schema, "name": view_name})
     return [r["column_name"] for r in rows]
@@ -203,7 +207,7 @@ if search:
 where_sql = " and ".join(where)
 
 # --- KPIs de PASSAGENS (vw_passage_classification_v5) ---
-view_cols = fetch_view_columns("public", "vw_passage_classification_v5")
+view_cols = fetch_view_columns("public", "mv_passage_classification_v5")
 
 # Mapeia nomes possíveis (pra você não ficar refém do nome exato da coluna)
 def pick_col(*candidates):
@@ -227,7 +231,7 @@ if col_ts_start:
     where_p.append(f"{col_ts_start} between %(start)s and %(end)s")
     params_p.update({"start": start_dt, "end": end_dt})
 else:
-    st.error("Não encontrei coluna de início da passagem na view vw_passage_classification_v5.")
+    st.error("Não encontrei coluna de início da passagem na view mv_passage_classification_v5.")
     st.stop()
 
 if accesses and col_access:
@@ -261,7 +265,7 @@ with base as (
     date({col_ts_start}) as dia,
     nullif(lower(trim({col_search_1})), '') as user_name,
     {col_profile} as user_profile
-  from public.vw_passage_classification_v5
+  from public.mv_passage_classification_v5
   where {where_p_sql}
 ),
 pessoas as (
@@ -331,13 +335,13 @@ select
   date_trunc('day', open_ts) as dia,
   count(*)::bigint as passagens,
   count(distinct nullif(lower(trim(user_name)), ''))::bigint as pessoas_unicas
-from public.vw_passage_classification_v5
+from public.mv_passage_classification_v5
 where {where_p_sql}
 group by 1
 order by 1;
 """
 
-df_day = pd.DataFrame(fetch_df(day_sql, params_p))
+df_day = q_df(day_sql, params_p)
 
 if df_day.empty:
     st.info("Sem dados no período selecionado.")
@@ -437,7 +441,7 @@ select
   extract(hour from open_ts)::int as hora,
   sum(case when user_profile = any(%(perfis_morador)s::text[]) then 1 else 0 end)::bigint as moradores,
   sum(case when user_profile <> any(%(perfis_morador)s::text[]) then 1 else 0 end)::bigint as nao_moradores
-from public.vw_passage_classification_v5
+from public.mv_passage_classification_v5
 where {' and '.join(where_peak)}
 group by 1
 order by 1;
@@ -445,12 +449,12 @@ order by 1;
 
 params_peak["perfis_morador"] = list(PERFIS_MORADOR)
 
-df_peak = pd.DataFrame(fetch_df(peak_sql, params_peak))
+df_peak = q_df(peak_sql, params_peak)
 
 check_sql = f"""
 select
   count(*)::bigint as passagens_proprietario
-from public.vw_passage_classification_v5
+from public.mv_passage_classification_v5
 where {where_p_sql}
   and user_profile = 'Proprietário';
 """
@@ -515,12 +519,12 @@ uso_sql = f"""
 select
   unit_group,
   count(*)::bigint as passagens
-from public.vw_passage_classification_v5
+from public.mv_passage_classification_v5
 where {where_p_sql}
 group by 1;
 """
 
-df_uso = pd.DataFrame(fetch_df(uso_sql, params_p))
+df_uso = q_df(uso_sql, params_p)
 
 if df_uso.empty:
     st.info("Sem dados suficientes para análise de uso do prédio.")
@@ -592,13 +596,13 @@ select
   door_access_name,
   coalesce(user_profile, 'Sem perfil') as user_profile,
   count(*)::bigint as passagens
-from public.vw_passage_classification_v5
+from public.mv_passage_classification_v5
 where {where_p_sql}
   and cause_code in (701, 708)
 group by 1, 2;
 """
 
-df_acc = pd.DataFrame(fetch_df(acessos_sql, params_p))
+df_acc = q_df(acessos_sql, params_p)
 df_acc["user_profile"] = df_acc["user_profile"].apply(canonical_profile)
 
 if df_acc.empty:

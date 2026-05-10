@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
+import numpy as np
 
 from ui.sidebar import render_sidebar_menu
 from src.db import fetch_df, fetch_distinct_values
@@ -33,6 +34,16 @@ render_sidebar_menu()
 def q_df(sql: str, params: dict):
     return pd.DataFrame(fetch_df(sql, params))
 
+def build_where_with_doors(where_base: str, params_base: dict, doors: list[str]):
+    where_ = where_base
+    params_ = dict(params_base)
+
+    if doors:
+        where_ += " and door_access_name = any(%(doors)s)"
+        params_["doors"] = doors
+
+    return where_, params_
+
 def fmt_seconds(s):
     if s is None or pd.isna(s):
         return "—"
@@ -58,10 +69,11 @@ def fmt_pct(n, d):
 
 st.title("Portas")
 st.caption(
-    "Aqui eu meço **quanto tempo cada porta permanece aberta** e destaco **casos extremos** (ex.: horas/dias aberta), "
-    "além de excedências configuráveis (Alerta / Risco / Calço). "
-    "O objetivo é transformar logs em decisões: identificar portas problemáticas, validar intervenções (sirene, orientação) "
-    "e apoiar auditoria de ocorrências."
+    "Esta página analisa **quanto tempo cada porta permanece aberta** e destaca "
+    "**casos extremos** (ex.: horas ou dias aberta), além de excedências configuráveis "
+    "(Alerta / Risco / Retenção). "
+    "O objetivo é transformar logs em decisões: identificar portas problemáticas, "
+    "avaliar intervenções (sirene, orientação) e apoiar auditorias."
 )
 
 # ============================================================
@@ -69,16 +81,20 @@ st.caption(
 # ============================================================
 
 with st.container(border=True):
-    col_doors, col_start, col_end, col_btn = st.columns([1.8, 1.5, 1.5, 1.0], vertical_alignment="bottom")
+    # mantém o all_doors porque vamos usar nas abas
+    all_doors = fetch_distinct_values("access_name")
 
-    with col_doors:
-        all_doors = fetch_distinct_values("access_name")
-        selected_doors = st.multiselect(
-            "Portas (opcional)",
-            all_doors,
-            key="doors_selected",
-            placeholder="Selecione uma ou mais portas"
-        )
+    CRITICAL_MATCH = [
+        "Portão Pedestre Externo",
+        "Portão Pedestre Interno",
+        "Hall Residencial",
+        "Hall NR",
+    ]
+
+    doors_critical = [d for d in all_doors if any(k in (d or "") for k in CRITICAL_MATCH)]
+    doors_other = [d for d in all_doors if d not in set(doors_critical)]
+
+    col_start, col_end, col_btn = st.columns([1.6, 1.6, 1.0], vertical_alignment="bottom")
 
     with col_start:
         c_sd, c_st = st.columns([1.1, 0.9])
@@ -115,8 +131,8 @@ with st.container(border=True):
 
 
         with c3:
-            use_hold = st.checkbox("Usar Calço", value=True)
-            th_hold_min = st.number_input("Calço (min)", min_value=1, max_value=1440, value=10, step=1, disabled=not use_hold)
+            use_hold = st.checkbox("Usar Retenção", value=True)
+            th_hold_min = st.number_input("Retenção (min)", min_value=1, max_value=1440, value=10, step=1, disabled=not use_hold)
             th_hold = th_hold_min * 60
 
         th_30m = 30 * 60
@@ -142,10 +158,6 @@ end_dt = datetime.combine(end_date, end_time)
 where = ["open_ts between %(start)s and %(end)s"]
 params = {"start": start_dt, "end": end_dt}
 
-if selected_doors:
-    where.append("door_access_name = any(%(doors)s::text[])")
-    params["doors"] = list(selected_doors)
-
 # excedências
 exceed = []
 if use_warn:
@@ -165,6 +177,27 @@ if use_hold:
     params["th_hold"] = int(th_hold)
 else:
     params["th_hold"] = 0
+
+# ==============================
+# Tetos efetivos das faixas
+# (evita faixas impossíveis quando thresholds são desligados)
+# ==============================
+BIG_S = 10**9  # "infinito" em segundos
+
+# teto do alerta:
+# - se Risco está ligado: alerta vai até Risco
+# - senão, se Retenção está ligada: alerta vai até Retenção
+# - senão: alerta vai até "infinito"
+th_alert_upper = (params["th_risk"] if params.get("th_risk", 0) > 0
+                  else (params["th_hold"] if params.get("th_hold", 0) > 0 else BIG_S))
+
+# teto do risco:
+# - se Retenção está ligada: risco vai até Retenção
+# - senão: risco vai até "infinito"
+th_risk_upper = (params["th_hold"] if params.get("th_hold", 0) > 0 else BIG_S)
+
+params["th_alert_upper"] = int(th_alert_upper)
+params["th_risk_upper"] = int(th_risk_upper)
 
 params["th_30m"] = int(th_30m)
 params["th_1h"] = int(th_1h)
@@ -208,7 +241,7 @@ if total_aberturas == 0:
     st.warning("Sem aberturas no período selecionado.")
     st.stop()
 
-st.subheader("Resumo do período (foco em casos extremos)")
+st.subheader("Resumo do período")
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Aberturas (no período)", f"{total_aberturas:,}")
@@ -217,102 +250,370 @@ c3.metric("Sem fechamento pareado (log)", f"{total_sem_close:,} ({fmt_pct(total_
 c4.metric("Maior tempo aberto", fmt_seconds(max_seconds_open))
 
 cols = st.columns(4)
-cols[0].metric(f">> Calço ({int(th_hold/60)}m)", f"{n_hold:,} ({fmt_pct(n_hold, total_pareadas)})")
-cols[1].metric(">> 30 min", f"{n_30m:,} ({fmt_pct(n_30m, total_pareadas)})")
+cols[0].metric(f"> Retenção ({int(th_hold/60)}m)", f"{n_hold:,} ({fmt_pct(n_hold, total_pareadas)})")
+cols[1].metric("> 30 min", f"{n_30m:,} ({fmt_pct(n_30m, total_pareadas)})")
 cols[2].metric(f">= {th_1h//3600}h", f"{n_1h:,} ({fmt_pct(n_1h, total_pareadas)})")
 
 st.divider()
 
-# ============================================================
-# Ranking simples por porta (somente dados limpos)
-# ============================================================
+def render_tab(tab_label: str, doors_group: list[str], key_prefix: str):
+    st.markdown(f"#### {tab_label}")
 
-rank_sql = f"""
-select
-  door_access_name,
-  count(*) filter (where has_close = true)::bigint as passagens_ok,
-  count(*) filter (where has_close = false)::bigint as passagens_sem_close,
+    selected = st.multiselect(
+        "Filtrar portas (opcional)",
+        options=doors_group,
+        default=[],
+        key=f"{key_prefix}_doors",
+        placeholder="Selecione uma ou mais portas"
+    )
 
-  max(seconds_open) filter (where has_close = true) as max_s,
+    doors_in_scope = selected if selected else doors_group
+    where_tab, params_tab = build_where_with_doors(where_sql, params, doors_in_scope)
 
-  count(*) filter (where has_close = true and seconds_open >= %(th_hold)s)::bigint as n_hold,
-  count(*) filter (where has_close = true and seconds_open >= %(th_30m)s)::bigint as n_30m,
-  count(*) filter (where has_close = true and seconds_open >= %(th_1h)s)::bigint as n_1h
-from public.mv_passages_v6
-where {where_sql}
-group by 1
-order by max_s desc nulls last, passagens_ok desc;
-"""
-df_rank = q_df(rank_sql, params)
+    # ============================================================
+    # Distribuição por porta (empilhado absoluto)
+    # ============================================================
 
-st.subheader("Ranking de portas (simples e acionável)")
-st.caption("Aqui eu considero **somente passagens pareadas (has_close = true)** para não contaminar os números.")
+    dist_sql = f"""
+    select
+      door_access_name,
+      count(*) filter (where has_close = true)::bigint as total_ok,
 
-df_show = df_rank.copy()
-df_show["Maior abertura"] = df_show["max_s"].apply(fmt_seconds)
+      count(*) filter (
+        where has_close = true
+          and seconds_open < %(th_warn)s
+      )::bigint as n_normal,
 
-# percentuais sobre passagens_ok (dados limpos)
-df_show["% >= Calço"] = df_show.apply(lambda r: fmt_pct(int(r["n_hold"]), int(r["passagens_ok"])), axis=1)
-df_show["% >= 30 min"] = df_show.apply(lambda r: fmt_pct(int(r["n_30m"]), int(r["passagens_ok"])), axis=1)
-df_show["% >= 1h"] = df_show.apply(lambda r: fmt_pct(int(r["n_1h"]), int(r["passagens_ok"])), axis=1)
+      count(*) filter (
+        where has_close = true
+          and seconds_open >= %(th_warn)s
+          and seconds_open < %(th_alert_upper)s
+      )::bigint as n_alerta,
 
-# qualidade do log (separado, mas visível)
-df_show["Sem fechamento (log)"] = df_show["passagens_sem_close"].astype(int)
+      count(*) filter (
+        where has_close = true
+          and seconds_open >= %(th_risk)s
+          and seconds_open < %(th_risk_upper)s
+      )::bigint as n_risco,
 
-df_show = df_show.rename(columns={
-    "door_access_name": "Porta",
-    "passagens_ok": "Passagens (ok)",
-})
+      count(*) filter (
+        where has_close = true
+          and seconds_open >= %(th_hold)s
+      )::bigint as n_retencao
 
-st.dataframe(
-    df_show[["Porta", "Passagens (ok)", "Maior abertura", "% >= Calço", "% >= 30 min", "% >= 1h", "Sem fechamento (log)"]],
+    from public.mv_passages_v6
+    where {where_tab}
+    group by 1
+    order by total_ok desc;
+    """
+    df_dist = q_df(dist_sql, params_tab)
 
-    hide_index=True
+    if df_dist.empty:
+        st.info("Sem dados suficientes para este recorte.")
+    else:
+        df_dist = df_dist.sort_values("total_ok", ascending=False)
+
+        # percentuais para texto/hover
+        for col in ["n_normal", "n_alerta", "n_risco", "n_retencao"]:
+            df_dist[f"pct_{col}"] = (df_dist[col] / df_dist["total_ok"] * 100).fillna(0)
+
+            # Faixas (sem sobreposição)
+            df_dist["n_retencao_band"] = df_dist["n_retencao"]
+            df_dist["n_risco_band"] = (df_dist["n_risco"] - df_dist["n_retencao"]).clip(lower=0)
+            df_dist["n_alerta_band"] = (df_dist["n_alerta"] - df_dist["n_risco"]).clip(lower=0)
+
+            df_dist["n_anormais_total"] = (
+                df_dist["n_alerta_band"] + df_dist["n_risco_band"] + df_dist["n_retencao_band"]
+            )
+
+        st.markdown("#### Aberturas totais (uso)")
+        fig_total = go.Figure()
+        fig_total.add_bar(
+            x=df_dist["door_access_name"],
+            y=df_dist["total_ok"],
+            marker_color="#2E7D32",  # verde
+            name="Total",
+            hovertemplate="%{x}<br>Total: %{y:,.0f}<extra></extra>",
+        )
+        fig_total.update_layout(height=420, margin=dict(l=20, r=20, t=10, b=20))
+        fig_total.update_xaxes(tickangle=-35)
+        fig_total = apply_plot_theme(fig_total, x_title=None, y_title="Aberturas (pareadas)")
+        st.plotly_chart(fig_total, use_container_width=True)
+
+    st.divider()
+
+    time_sql = f"""
+    select
+    door_access_name,
+
+    -- ALERTA
+    count(*) filter (
+        where has_close = true
+        and seconds_open >= %(th_warn)s
+        and seconds_open <  %(th_alert_upper)s
+    )::bigint as alert_n,
+    sum(seconds_open) filter (
+        where has_close = true
+        and seconds_open >= %(th_warn)s
+        and seconds_open <  %(th_alert_upper)s
+    )::bigint as alert_seconds,
+
+    -- RISCO
+    count(*) filter (
+        where has_close = true
+        and seconds_open >= %(th_alert_upper)s
+        and seconds_open <  %(th_risk_upper)s
+    )::bigint as risk_n,
+    
+    sum(seconds_open) filter (
+        where has_close = true
+        and seconds_open >= %(th_alert_upper)s
+        and seconds_open <  %(th_risk_upper)s
+    )::bigint as risk_seconds,
+
+    -- RETENÇÃO
+    count(*) filter (
+        where has_close = true
+        and seconds_open >= %(th_risk_upper)s
+    )::bigint as hold_n,
+    sum(seconds_open) filter (
+        where has_close = true
+        and seconds_open >= %(th_risk_upper)s
+    )::bigint as hold_seconds,
+
+    max(seconds_open) filter (
+    where has_close = true
+        and seconds_open >= %(th_warn)s
+        and seconds_open <  %(th_risk)s
+    )::bigint as alert_max_seconds,
+
+    max(seconds_open) filter (
+    where has_close = true
+        and seconds_open >= %(th_risk)s
+        and seconds_open <  %(th_hold)s
+    )::bigint as risk_max_seconds,
+
+    max(seconds_open) filter (
+    where has_close = true
+        and seconds_open >= %(th_hold)s
+    )::bigint as hold_max_seconds
+
+    from public.mv_passages_v6
+    where {where_tab}
+    group by 1;
+    """
+    df_time = q_df(time_sql, params_tab)
+
+    def fmt_duration(seconds: float | int | None) -> str:
+        if seconds is None or pd.isna(seconds):
+            return "—"
+        try:
+            s = int(round(float(seconds)))
+        except Exception:
+            return "—"
+
+        if s < 60:
+            return f"{s}s"
+        if s < 3600:
+            m = s // 60
+            ss = s % 60
+            return f"{m}m {ss:02d}s" if ss else f"{m}m"
+        h = s // 3600
+        rem = s % 3600
+        m = rem // 60
+        return f"{h}h {m:02d}m" if m else f"{h}h"
+
+    if not df_time.empty:
+        for c in ["alert_n", "risk_n", "hold_n", "alert_seconds", "risk_seconds", "hold_seconds"]:
+            df_time[c] = df_time[c].fillna(0)
+
+        # garantir colunas de max existam e não quebrem
+        for c in ["alert_max_seconds", "risk_max_seconds", "hold_max_seconds"]:
+            if c not in df_time.columns:
+                df_time[c] = 0
+            df_time[c] = df_time[c].fillna(0)
+
+        # médias em segundos (para formatar como tempo)
+        df_time["alert_mean_seconds"] = (df_time["alert_seconds"] / df_time["alert_n"]).where(df_time["alert_n"] > 0, 0)
+        df_time["risk_mean_seconds"]  = (df_time["risk_seconds"]  / df_time["risk_n"]).where(df_time["risk_n"] > 0, 0)
+        df_time["hold_mean_seconds"]  = (df_time["hold_seconds"]  / df_time["hold_n"]).where(df_time["hold_n"] > 0, 0)
+
+        # strings prontas para o hover
+        df_time["alert_total_str"] = df_time["alert_seconds"].apply(fmt_duration)
+        df_time["risk_total_str"]  = df_time["risk_seconds"].apply(fmt_duration)
+        df_time["hold_total_str"]  = df_time["hold_seconds"].apply(fmt_duration)
+
+        df_time["alert_mean_str"] = df_time["alert_mean_seconds"].apply(fmt_duration)
+        df_time["risk_mean_str"]  = df_time["risk_mean_seconds"].apply(fmt_duration)
+        df_time["hold_mean_str"]  = df_time["hold_mean_seconds"].apply(fmt_duration)
+
+        df_time["alert_max_str"] = df_time["alert_max_seconds"].apply(fmt_duration)
+        df_time["risk_max_str"]  = df_time["risk_max_seconds"].apply(fmt_duration)
+        df_time["hold_max_str"]  = df_time["hold_max_seconds"].apply(fmt_duration)
+
+        # minutos totais
+        df_time["alert_min"] = df_time["alert_seconds"] / 60.0
+        df_time["risk_min"]  = df_time["risk_seconds"] / 60.0
+        df_time["hold_min"]  = df_time["hold_seconds"] / 60.0
+
+        # duração média por ocorrência (típico)
+        df_time["alert_mean_min"] = (df_time["alert_min"] / df_time["alert_n"]).where(df_time["alert_n"] > 0, 0.0)
+        df_time["risk_mean_min"]  = (df_time["risk_min"]  / df_time["risk_n"]).where(df_time["risk_n"] > 0, 0.0)
+        df_time["hold_mean_min"]  = (df_time["hold_min"]  / df_time["hold_n"]).where(df_time["hold_n"] > 0, 0.0)
+
+        # Opção 2B: score log no valor (tempo total)
+        df_time["alert_logscore"] = np.log10(1 + df_time["alert_min"])
+        df_time["risk_logscore"]  = np.log10(1 + df_time["risk_min"])
+        df_time["hold_logscore"]  = np.log10(1 + df_time["hold_min"])
+
+        # Opção 3: score híbrido (freq × duração típica comprimida)
+        # score = n * ln(1 + média_min)
+        df_time["alert_hybrid"] = df_time["alert_n"] * np.log1p(df_time["alert_mean_min"])
+        df_time["risk_hybrid"]  = df_time["risk_n"]  * np.log1p(df_time["risk_mean_min"])
+        df_time["hold_hybrid"]  = df_time["hold_n"]  * np.log1p(df_time["hold_mean_min"])                                                                  
+
+    st.markdown("#### Impacto de anomalias por categoria")
+    st.caption(
+        "Fator de risco*: maior valor indica maior impacto acumulado da anomalia."
+    )
+    st.caption(
+        "*Cálculo baseado no tempo total das ocorrências com compressão logarítmica "
+        "para evitar distorções por eventos extremos."
+    )
+    if df_time.empty:
+        st.info("Sem dados de tempo para este recorte.")
+    else:
+        # ordena por impacto (retenção + risco) primeiro
+        df_time["impact_min"] = df_time["hold_min"] + df_time["risk_min"]
+        df_time = df_time.sort_values("impact_min", ascending=False)
+
+        # Score log10(1 + minutos)
+        y_alert = df_time["alert_logscore"]
+        y_risk  = df_time["risk_logscore"]
+        y_hold  = df_time["hold_logscore"]
+
+        y_title = "Impacto (fator de risco*)"
+        hover_suffix = "score"
+
+        def fmt_duration(seconds: float | int | None) -> str:
+            if seconds is None:
+                return "—"
+            try:
+                s = int(round(float(seconds)))
+            except Exception:
+                return "—"
+
+            if s < 60:
+                return f"{s}s"
+            if s < 3600:
+                m = s // 60
+                ss = s % 60
+                return f"{m}m {ss:02d}s" if ss else f"{m}m"
+            h = s // 3600
+            rem = s % 3600
+            m = rem // 60
+            return f"{h}h {m:02d}m" if m else f"{h}h"
+
+        fig_abn = go.Figure()
+
+        if use_warn:
+            fig_abn.add_bar(
+                x=df_time["door_access_name"],
+                y=df_time["alert_logscore"],
+                name="Alerta",
+                marker_color="#FBC02D",
+                customdata=list(zip(
+                    df_time["alert_total_str"],
+                    df_time["alert_n"],
+                    df_time["alert_mean_str"],
+                    df_time["alert_max_str"],
+                )),
+                hovertemplate=(
+                    f"Alerta (≥ {int(th_warn)}s)<br>"
+                    "Fator de risco: %{y:.2f}<br>"
+                    "Tempo total: %{customdata[0]}<br>"
+                    "Ocorrências: %{customdata[1]:,.0f}<br>"
+                    "Máximo: %{customdata[3]}<br>"
+                    "Média: %{customdata[2]}"
+                    "<extra></extra>"
+                ),
+            )
+
+        risk_min_label = int(th_risk / 60)
+
+        if use_risk:
+            fig_abn.add_bar(
+                x=df_time["door_access_name"],
+                y=df_time["risk_logscore"],
+                name="Risco",
+                marker_color="#FB8C00",
+                customdata=list(zip(
+                    df_time["risk_total_str"],
+                    df_time["risk_n"],
+                    df_time["risk_mean_str"],
+                    df_time["risk_max_str"],
+                )),
+                hovertemplate=(
+                    f"Risco (≥ {risk_min_label}min)<br>"
+                    "Fator de risco: %{y:.2f}<br>"
+                    "Tempo total: %{customdata[0]}<br>"
+                    "Ocorrências: %{customdata[1]:,.0f}<br>"
+                    "Máximo: %{customdata[3]}<br>"
+                    "Média: %{customdata[2]}"
+                    "<extra></extra>"
+                ),
+            )
+
+        hold_min_label = int(th_hold / 60)
+
+        if use_hold:
+            fig_abn.add_bar(
+                x=df_time["door_access_name"],
+                y=df_time["hold_logscore"],
+                name="Retenção",
+                marker_color="#E53935",
+                customdata=list(zip(
+                    df_time["hold_total_str"],
+                    df_time["hold_n"],
+                    df_time["hold_mean_str"],
+                    df_time["hold_max_str"],
+                )),
+                hovertemplate=(
+                    f"Retenção (≥ {hold_min_label}min)<br>"
+                    "Fator de risco: %{y:.2f}<br>"
+                    "Tempo total: %{customdata[0]}<br>"
+                    "Ocorrências: %{customdata[1]:,.0f}<br>"
+                    "Máximo: %{customdata[3]}<br>"
+                    "Média: %{customdata[2]}"
+                    "<extra></extra>"
+                ),
+            )
+
+        fig_abn.update_layout(
+            barmode="group",
+            bargap=0.25,
+            height=420,
+            margin=dict(l=20, r=20, t=10, b=20),
+        )
+        fig_abn.update_xaxes(tickangle=-35)
+        fig_abn = apply_plot_theme(fig_abn, x_title=None, y_title=y_title)
+        st.plotly_chart(fig_abn, use_container_width=True)
+
+
+
+st.subheader("Volume de aberturas por porta (com destaque por categoria)")
+st.caption(
+    "A altura da barra representa o total de aberturas pareadas no período. "
+    "As cores mostram quantas aberturas caem em Normal / Alerta / Risco / Retenção."
 )
 
-# ============================================================
-# Gráfico: % >= Calço (ou 5m/1h) por porta
-# ============================================================
+col1, col2 = st.columns(2, gap="large")
 
-st.subheader("Excedência por porta (visão rápida)")
+with col1:
+    render_tab("Portas críticas (acessos do condomínio)", doors_critical, "crit")
 
-metric = st.selectbox(
-    "Métrica do gráfico",
-    options=[
-        ("% >= Calço", "pct_hold"),
-        ("% >= 30 min", "pct_30m"),
-        ("% >= 1h", "pct_1h"),
-        ("Sem fechamento (log) %", "pct_sem_close"),
-    ],
-    index=0
-)
-
-df_plot = df_rank.copy()
-df_plot["pct_hold"] = (df_plot["n_hold"] / df_plot["passagens_ok"] * 100).fillna(0)
-df_plot["pct_30m"] = (df_plot["n_30m"] / df_plot["passagens_ok"] * 100).fillna(0)
-df_plot["pct_1h"] = (df_plot["n_1h"] / df_plot["passagens_ok"] * 100).fillna(0)
-
-df_plot["total"] = df_plot["passagens_ok"] + df_plot["passagens_sem_close"]
-df_plot["pct_sem_close"] = (df_plot["passagens_sem_close"] / df_plot["total"] * 100).fillna(0)
-
-label, key = metric
-df_plot = df_plot.sort_values(key, ascending=False)
-
-fig = go.Figure()
-fig.add_bar(
-    y=df_plot["door_access_name"],
-    x=df_plot[key],
-    orientation="h",
-    hovertemplate="%{y}<br>%{x:.1f}%<extra></extra>",
-)
-fig.update_layout(
-    height=max(420, 28 * len(df_plot) + 140),
-    margin=dict(l=20, r=20, t=20, b=20),
-    showlegend=False,
-)
-fig = apply_plot_theme(fig, x_title=label, y_title=None)
-fig.update_yaxes(autorange="reversed")
-st.plotly_chart(fig, use_container_width=True)
+with col2:
+    render_tab("Outras portas (áreas comuns / apoio)", doors_other, "other")
 
 st.divider()
 
@@ -327,7 +628,7 @@ min_filter = st.selectbox(
     "Filtrar casos por duração mínima",
     [
         ("Sem filtro", 0),
-        (f">= Calço ({th_hold_min} min)", th_hold),
+        (f">= Retenção ({th_hold_min} min)", th_hold),
         (">= 30 min", th_30m),
         (">= 1 hora", th_1h),
     ],
@@ -373,7 +674,7 @@ else:
 
 with st.expander("Qualidade do log (diagnóstico — não entra nas estatísticas acima)", expanded=False):
     st.caption(
-        "Aqui eu mostro **aberturas sem fechamento pareado**. Isso pode indicar falha de sensor/export ou ruído de evento. "
+        "Esta seção apresenta **aberturas sem fechamento pareado**. Isso pode indicar falha de sensor/export ou ruído de evento. "
         "As estatísticas de segurança acima usam somente `has_close = true`."
     )
 
