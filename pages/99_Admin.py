@@ -64,6 +64,7 @@ def fetch_audit_events_with_passage(
     offset_events: int,
     only_suspicious_groups: bool,
     show_ungrouped: bool,
+    order_desc: bool = False,
 ):
     params = {
         "start": start_dt,
@@ -76,7 +77,9 @@ def fetch_audit_events_with_passage(
         "show_ungrouped": show_ungrouped,
     }
 
-    sql = """
+    order_dir = "desc" if order_desc else "asc"
+
+    sql = f"""
     select
     e.event_id,
     e.event_timestamp,
@@ -109,7 +112,7 @@ def fetch_audit_events_with_passage(
     and (%(show_ungrouped)s = true or coalesce(a.audit_role,'UNGROUPED') <> 'UNGROUPED')
     and (%(only_suspicious)s = false or (a.audit_score is not null and a.audit_score <= 60))
 
-    order by e.event_timestamp asc
+    order by e.event_timestamp {order_dir}
     limit %(limit)s
     offset %(offset)s;
     """
@@ -157,10 +160,7 @@ else:
                 horizontal=True, label_visibility="collapsed", key="audit_sort_order", index=0
             )
 
-    def _apply_audit_sort(df_view: pd.DataFrame) -> pd.DataFrame:
-        if sort_order_audit == "↓ Mais recente":
-            return df_view.iloc[::-1].reset_index(drop=True)
-        return df_view
+    _order_desc = (sort_order_audit == "↓ Mais recente")
 
     if run:
         start_dt = datetime.combine(audit_day, audit_start)
@@ -178,10 +178,12 @@ else:
                 offset_events=offset_events,
                 only_suspicious_groups=only_suspicious_groups,
                 show_ungrouped=show_ungrouped,
+                order_desc=_order_desc,
             )
 
         if dfe.empty:
             st.session_state.pop("audit_df_view", None)
+            st.session_state.pop("audit_df_order_desc", None)
             st.warning("Nenhum evento encontrado nesse recorte (ou tudo filtrado).")
             st.stop()
 
@@ -216,15 +218,21 @@ else:
         ]].copy()
 
         st.session_state["audit_df_view"] = df_view
+        st.session_state["audit_df_order_desc"] = _order_desc
 
-        render_kiper_table_audit(_apply_audit_sort(df_view))
+        render_kiper_table_audit(df_view)
         st.caption("Navegue em páginas com **offset**. Ex.: 0, 3000, 6000…")
 
     else:
         cached = st.session_state.get("audit_df_view")
+        cached_order_desc = st.session_state.get("audit_df_order_desc")
+
         if cached is not None and not cached.empty:
-            render_kiper_table_audit(_apply_audit_sort(cached))
-            st.caption("Navegue em páginas com **offset**. Ex.: 0, 3000, 6000…")
+            if cached_order_desc != _order_desc:
+                st.info("Ordenação alterada. Clique em **Carregar** para aplicar.")
+            else:
+                render_kiper_table_audit(cached)
+                st.caption("Navegue em páginas com **offset**. Ex.: 0, 3000, 6000…")
         else:
             st.info("Selecione o dia e o horário e clique em **Carregar**.")
 
