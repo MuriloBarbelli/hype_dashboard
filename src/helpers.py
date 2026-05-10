@@ -406,6 +406,16 @@ def render_kiper_table(df_raw: pd.DataFrame) -> None:
     </style>
     """
 
+    def _s(v) -> str:
+        """Converte valor para string limpa, retornando '' para None/NaN."""
+        try:
+            if pd.isna(v):
+                return ""
+        except Exception:
+            pass
+        s = str(v).strip()
+        return "" if s.lower() == "nan" else s
+
     rows_html = []
     for _, r in df_raw.iterrows():
         dt = r.get("event_timestamp")
@@ -422,8 +432,8 @@ def render_kiper_table(df_raw: pd.DataFrame) -> None:
         )
 
         # Disparado por: nome + badge
-        user_name = str(r.get("user_name") or "").strip()
-        user_profile = str(r.get("user_profile") or "").strip()
+        user_name = _s(r.get("user_name"))
+        user_profile = _s(r.get("user_profile"))
 
         user_html_parts = []
         if user_name:
@@ -436,8 +446,8 @@ def render_kiper_table(df_raw: pd.DataFrame) -> None:
         )
 
         # GU + Unidade (2 linhas)
-        ug = str(r.get("unit_group") or "").strip()
-        un = str(r.get("unit") or "").strip()
+        ug = _s(r.get("unit_group"))
+        un = _s(r.get("unit"))
 
         gu_html = "<div class='cell-stack'>"
         if ug:
@@ -447,7 +457,7 @@ def render_kiper_table(df_raw: pd.DataFrame) -> None:
         gu_html += "</div>"
 
         # Registro do evento
-        treatment = str(r.get("treatment") or "").strip()
+        treatment = _s(r.get("treatment"))
         reg_html = f"<p class='kiper-line'>{html.escape(treatment)}</p>"
 
         rows_html.append(
@@ -668,6 +678,16 @@ def render_kiper_table_audit(df_raw: pd.DataFrame) -> None:
         # alternância bem perceptível, mas suave
         return "rgba(0,0,0,0.02)" if group_bg_parity[gid] == 0 else "rgba(0,0,0,0.06)"
 
+    def _sa(v) -> str:
+        """Converte valor para string limpa, retornando '' para None/NaN."""
+        try:
+            if pd.isna(v):
+                return ""
+        except Exception:
+            pass
+        s = str(v).strip()
+        return "" if s.lower() == "nan" else s
+
     for _, r in df_raw.iterrows():
         dt = r.get("event_timestamp")
         if pd.notnull(dt):
@@ -679,8 +699,8 @@ def render_kiper_table_audit(df_raw: pd.DataFrame) -> None:
         desc_lines = str(r.get("descricao") or "").split("\n")
         desc_html = "".join([f"<p class='kiper-line'>{html.escape(line)}</p>" for line in desc_lines if line])
 
-        user_name = str(r.get("user_name") or "").strip()
-        user_profile = str(r.get("user_profile") or "").strip()
+        user_name = _sa(r.get("user_name"))
+        user_profile = _sa(r.get("user_profile"))
 
         user_html_parts = []
         if user_name:
@@ -689,8 +709,8 @@ def render_kiper_table_audit(df_raw: pd.DataFrame) -> None:
             user_html_parts.append(kiper_badge(user_profile))
         user_html = "<div class='cell-stack'>" + "".join(user_html_parts) + "</div>" if user_html_parts else ""
 
-        ug = str(r.get("unit_group") or "").strip()
-        un = str(r.get("unit") or "").strip()
+        ug = _sa(r.get("unit_group"))
+        un = _sa(r.get("unit"))
         gu_html = "<div class='cell-stack'>"
         if ug:
             gu_html += f"<p class='kiper-line'>{html.escape(ug)}</p>"
@@ -698,12 +718,13 @@ def render_kiper_table_audit(df_raw: pd.DataFrame) -> None:
             gu_html += f"<p class='kiper-line'>{html.escape(un)}</p>"
         gu_html += "</div>"
 
-        treatment = str(r.get("treatment") or "").strip()
+        treatment = _sa(r.get("treatment"))
         audit_html = ""
 
         # --- auditoria
-        role = str(r.get("audit_role") or "UNGROUPED").upper()
-        group_id = str(r.get("audit_group") or "").strip() or None
+        role = _sa(r.get("audit_role")) or "UNGROUPED"
+        role = role.upper()
+        group_id = _sa(r.get("audit_group")) or None
 
         # detecta começo de grupo (para separar visualmente)
         is_group_start = False
