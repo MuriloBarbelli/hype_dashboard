@@ -276,13 +276,17 @@ def _insert_events(conn, df) -> int:
 
 
 def _refresh_views(conn) -> None:
-    sql = """
-    REFRESH MATERIALIZED VIEW public.mv_passages_v5;
-    REFRESH MATERIALIZED VIEW public.mv_passages_v6;
-    REFRESH MATERIALIZED VIEW public.mv_passage_classification_v5;
-    """
+    views = [
+        "public.mv_passages_v5",
+        "public.mv_passages_v6",
+        "public.mv_passage_classification_v5",
+    ]
     with conn.cursor() as cur:
-        cur.execute(sql)
+        # Desabilita statement_timeout: os REFRESHes podem levar vários minutos
+        cur.execute("SET statement_timeout = 0")
+        for view in views:
+            log.info("  Refreshing %s...", view)
+            cur.execute(f"REFRESH MATERIALIZED VIEW {view}")
     try:
         conn.commit()
     except Exception:
