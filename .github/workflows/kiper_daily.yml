@@ -1,0 +1,85 @@
+name: Kiper Daily Extractor
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Quantos dias retroativos buscar'
+        required: false
+        default: '7'
+
+jobs:
+  extract:
+    name: Extrair dados do Kiper
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      KIPER_AUTHORIZATION:           ${{ secrets.KIPER_AUTHORIZATION }}
+      KIPER_REFRESH:                 ${{ secrets.KIPER_REFRESH }}
+      KIPER_TOPCONTEXTID:            ${{ secrets.KIPER_TOPCONTEXTID }}
+      KIPER_TOPNODEID:               ${{ secrets.KIPER_TOPNODEID }}
+      KIPER_USERCONTEXTID:           ${{ secrets.KIPER_USERCONTEXTID }}
+      KIPER_USERPARTNERCONTEXTID:    ${{ secrets.KIPER_USERPARTNERCONTEXTID }}
+      DB_HOST:      ${{ secrets.DB_HOST }}
+      DB_PORT:      ${{ secrets.DB_PORT }}
+      DB_NAME:      ${{ secrets.DB_NAME }}
+      DB_USER:      ${{ secrets.DB_USER }}
+      DB_PASSWORD:  ${{ secrets.DB_PASSWORD }}
+      DB_SSLMODE:   ${{ secrets.DB_SSLMODE }}
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Executar extrator do Kiper
+        id: extractor
+        run: |
+          DAYS="${{ github.event.inputs.days || '7' }}"
+          echo "Rodando com --days $DAYS"
+          python -m tools.kiper_extractor --fill-until-complete --days "$DAYS"
+
+      - name: Reportar sucesso
+        if: success()
+        run: echo "✅ Extração concluída com sucesso em $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+  notify_failure:
+    name: Notificar falha por email
+    runs-on: ubuntu-latest
+    needs: extract
+    if: failure()
+
+    steps:
+      - name: Enviar email de alerta
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          secure: false
+          username: ${{ secrets.ALERT_EMAIL_FROM }}
+          password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+          subject: "❌ [hype_dashboard] Falha na extração diária do Kiper"
+          to: ${{ secrets.ALERT_EMAIL_TO }}
+          from: "hype_dashboard bot <${{ secrets.ALERT_EMAIL_FROM }}>"
+          body: |
+            O job de extração diária do Kiper falhou.
+
+            Repositório : MuriloBarbelli/hype_dashboard
+            Workflow    : Kiper Daily Extractor
+            Commit      : ${{ github.sha }}
+
+            Log completo:
+            https://github.com/MuriloBarbelli/hype_dashboard/actions/runs/${{ github.run_id }}

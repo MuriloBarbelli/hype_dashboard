@@ -38,7 +38,9 @@ st.session_state["current_page"] = "Visão geral"
 render_sidebar_menu()
 
 st.title("Visão geral")
-st.caption("Para efeitos demonstrativos, está disponivel uma amostragem de período entre 01/12/2025 a 18/01/2026")
+_dr = q_one("SELECT MIN(DATE(event_timestamp)) AS min_d, MAX(DATE(event_timestamp)) AS max_d FROM public.events", {})
+if _dr and _dr["min_d"]:
+    st.caption(f"Para efeitos demonstrativos, está disponível uma amostragem de período entre {_dr['min_d'].strftime('%d/%m/%Y')} a {_dr['max_d'].strftime('%d/%m/%Y')}")
 
 @st.cache_data(ttl=60)
 def fetch_event_type_options():

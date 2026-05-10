@@ -27,7 +27,17 @@ def get_events_source() -> str:
 # ============================================================
 
 st.header("Relatórios • Eventos")
-st.caption("Para efeitos demonstrativos, está disponivel uma amostragem de período entre 01/12/2025 a 18/01/2026")
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_date_range_relatorios():
+    rows = fetch_df("SELECT MIN(DATE(event_timestamp)) AS min_d, MAX(DATE(event_timestamp)) AS max_d FROM public.events")
+    if rows and rows[0]["min_d"]:
+        return rows[0]["min_d"].strftime("%d/%m/%Y"), rows[0]["max_d"].strftime("%d/%m/%Y")
+    return None, None
+
+_min_d, _max_d = _fetch_date_range_relatorios()
+if _min_d:
+    st.caption(f"Para efeitos demonstrativos, está disponível uma amostragem de período entre {_min_d} a {_max_d}")
 
 # ----------------------------
 # A) Filtros no topo (layout tipo Kiper)
