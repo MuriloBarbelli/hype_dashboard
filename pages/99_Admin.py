@@ -20,30 +20,30 @@ st.title("Admin")
 # 1) Modo de Dados
 # ============================================================
 
-st.header("1) Modo de Dados")
-
 admin_pwd = (os.environ.get("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD", "")).strip()
-entered = st.text_input("Senha do Admin", type="password").strip()
 
-col1, col2 = st.columns(2)
+_data_mode = st.session_state.get("data_mode", "anon")
+_icon = "🔓" if _data_mode == "real" else "🔒"
+with st.expander(f"{_icon} Modo de Dados: {_data_mode.upper()}", expanded=False):
+    entered = st.text_input("Senha do Admin", type="password").strip()
 
-with col1:
-    if st.button("Ativar DADOS REAIS"):
-        if not admin_pwd:
-            st.error("ADMIN_PASSWORD não está configurada no ambiente/Secrets.")
-        elif entered == admin_pwd:
-            st.session_state["data_mode"] = "real"
-            st.success("Modo REAL ativado (somente nesta sessão).")
-        else:
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("Ativar DADOS REAIS"):
+            if not admin_pwd:
+                st.error("ADMIN_PASSWORD não está configurada no ambiente/Secrets.")
+            elif entered == admin_pwd:
+                st.session_state["data_mode"] = "real"
+                st.success("Modo REAL ativado (somente nesta sessão).")
+            else:
+                st.session_state["data_mode"] = "anon"
+                st.error("Senha incorreta. Mantendo modo ANÔNIMO.")
+
+    with col2:
+        if st.button("Voltar para ANÔNIMO"):
             st.session_state["data_mode"] = "anon"
-            st.error("Senha incorreta. Mantendo modo ANÔNIMO.")
-
-with col2:
-    if st.button("Voltar para ANÔNIMO"):
-        st.session_state["data_mode"] = "anon"
-        st.info("Modo ANÔNIMO ativado.")
-
-st.caption(f"Modo atual: **{st.session_state.get('data_mode', 'anon').upper()}**")
+            st.info("Modo ANÔNIMO ativado.")
 
 # ============================================================
 # 2) Auditoria de Passagens
@@ -116,7 +116,7 @@ st.divider()
 st.header("2) Auditoria de Passagens")
 st.caption("Leitura em formato log (Kiper) + anotações do interpretador. Use sempre 1 dia por vez.")
 
-is_admin_ok = bool(admin_pwd) and (entered == admin_pwd)
+is_admin_ok = bool(admin_pwd) and (st.session_state.get("data_mode") == "real")
 if not is_admin_ok:
     st.info("🔒 Para acessar a auditoria, digite a **Senha do Admin** acima.")
 else:
