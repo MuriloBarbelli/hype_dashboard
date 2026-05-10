@@ -25,10 +25,10 @@ admin_pwd = (os.environ.get("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD"
 _data_mode = st.session_state.get("data_mode", "anon")
 _icon = "🔓" if _data_mode == "real" else "🔒"
 with st.expander(f"{_icon} Modo de Dados: {_data_mode.upper()}", expanded=False):
-    c_pwd, c_btn, c_status = st.columns([7, 2, 1], vertical_alignment="bottom")
+    c_pwd, c_btn, c_status, _ = st.columns([2, 1, 1, 6], vertical_alignment="bottom")
 
     with c_pwd:
-        entered = st.text_input("Senha do Admin", type="password", label_visibility="collapsed",
+        entered = st.text_input("senha", type="password", label_visibility="collapsed",
                                 placeholder="Senha do Admin").strip()
     with c_btn:
         if _data_mode == "anon":
