@@ -25,25 +25,31 @@ admin_pwd = (os.environ.get("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD"
 _data_mode = st.session_state.get("data_mode", "anon")
 _icon = "🔓" if _data_mode == "real" else "🔒"
 with st.expander(f"{_icon} Modo de Dados: {_data_mode.upper()}", expanded=False):
-    entered = st.text_input("Senha do Admin", type="password").strip()
+    c_pwd, c_btn, c_status = st.columns([7, 2, 1], vertical_alignment="bottom")
 
-    col1, col2 = st.columns(2)
+    with c_pwd:
+        entered = st.text_input("Senha do Admin", type="password", label_visibility="collapsed",
+                                placeholder="Senha do Admin").strip()
+    with c_btn:
+        if _data_mode == "anon":
+            btn_clicked = st.button("🔓 Ativar REAL", use_container_width=True, type="primary")
+        else:
+            btn_clicked = st.button("🔒 Voltar ANON", use_container_width=True)
 
-    with col1:
-        if st.button("Ativar DADOS REAIS"):
-            if not admin_pwd:
-                st.error("ADMIN_PASSWORD não está configurada no ambiente/Secrets.")
-            elif entered == admin_pwd:
-                st.session_state["data_mode"] = "real"
-                st.success("Modo REAL ativado (somente nesta sessão).")
-            else:
-                st.session_state["data_mode"] = "anon"
-                st.error("Senha incorreta. Mantendo modo ANÔNIMO.")
+    with c_status:
+        st.caption(f"**{_data_mode.upper()}**")
 
-    with col2:
-        if st.button("Voltar para ANÔNIMO"):
+    if btn_clicked:
+        if _data_mode == "real":
             st.session_state["data_mode"] = "anon"
-            st.info("Modo ANÔNIMO ativado.")
+            st.rerun()
+        elif not admin_pwd:
+            st.error("ADMIN_PASSWORD não configurada.")
+        elif entered == admin_pwd:
+            st.session_state["data_mode"] = "real"
+            st.rerun()
+        else:
+            st.error("Senha incorreta.")
 
 # ============================================================
 # 2) Auditoria de Passagens
