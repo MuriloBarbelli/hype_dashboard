@@ -45,7 +45,7 @@ if _min_d:
 with st.container(border=True):
 
     # ===== Linha 1: Evento | Período inicial (data+hora) | Período final (data+hora) | Botão
-    col_event, col_start, col_end, col_btn = st.columns([1.8, 1.5, 1.5, 1.0], vertical_alignment="bottom")
+    col_event, col_start, col_end, col_btn, col_sort = st.columns([1.8, 1.5, 1.5, 0.9, 1.2], vertical_alignment="bottom")
 
     with col_event:
         event_options = fetch_event_type_options()
@@ -91,6 +91,12 @@ with st.container(border=True):
     with col_btn:
         run_clicked = st.button("Gerar relatório", type="primary", use_container_width=True, key="rel_run")
     
+    with col_sort:
+        sort_order = st.radio(
+            "Ordenação", ["↓ Mais recente", "↑ Mais antigo"],
+            horizontal=True, label_visibility="collapsed", key="rel_sort_order", index=0
+        )
+
     if run_clicked:
         sync_shared_period_from_widgets()
         st.session_state.page = 1  # sempre volta pra página 1 ao "gerar"
@@ -250,6 +256,9 @@ offset %(offset)s;
 """
 
 df = pd.DataFrame(fetch_df(sql, params))
+
+if st.session_state.get("rel_sort_order") == "↑ Mais antigo":
+    df = df.iloc[::-1].reset_index(drop=True)
 
 # ----------------------------
 # E) Render tabela

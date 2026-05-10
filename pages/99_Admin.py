@@ -144,17 +144,25 @@ else:
         with c7:
             show_ungrouped = st.checkbox("Mostrar eventos NÃO agrupados", value=True)
 
-        c8, c9, c10 = st.columns([1.0, 1.2, 1.4], vertical_alignment="bottom")
+        c8, c9, c10, c11 = st.columns([1.0, 1.2, 1.0, 1.4], vertical_alignment="bottom")
         with c8:
             slack_seconds = st.slider("Folga p/ match (seg)", 0, 120, 30, 5)
         with c9:
             only_suspicious_groups = st.checkbox("Só grupos suspeitos", value=False)
         with c10:
             run = st.button("Carregar", type="primary")
+        with c11:
+            sort_order_audit = st.radio(
+                "Ordenação", ["↑ Mais antigo", "↓ Mais recente"],
+                horizontal=True, label_visibility="collapsed", key="audit_sort_order", index=0
+            )
 
-    if not run:
-        st.info("Selecione o dia e o horário e clique em **Carregar**.")
-    else:
+    def _apply_audit_sort(df_view: pd.DataFrame) -> pd.DataFrame:
+        if sort_order_audit == "↓ Mais recente":
+            return df_view.iloc[::-1].reset_index(drop=True)
+        return df_view
+
+    if run:
         start_dt = datetime.combine(audit_day, audit_start)
         end_dt = datetime.combine(audit_day, audit_end)
 
@@ -173,6 +181,7 @@ else:
             )
 
         if dfe.empty:
+            st.session_state.pop("audit_df_view", None)
             st.warning("Nenhum evento encontrado nesse recorte (ou tudo filtrado).")
             st.stop()
 
@@ -206,9 +215,18 @@ else:
             "passage_kind", "cause_code", "confianca_causa",
         ]].copy()
 
-        render_kiper_table_audit(df_view)
+        st.session_state["audit_df_view"] = df_view
 
+        render_kiper_table_audit(_apply_audit_sort(df_view))
         st.caption("Navegue em páginas com **offset**. Ex.: 0, 3000, 6000…")
+
+    else:
+        cached = st.session_state.get("audit_df_view")
+        if cached is not None and not cached.empty:
+            render_kiper_table_audit(_apply_audit_sort(cached))
+            st.caption("Navegue em páginas com **offset**. Ex.: 0, 3000, 6000…")
+        else:
+            st.info("Selecione o dia e o horário e clique em **Carregar**.")
 
 # ============================================================
 # 3) Ferramentas de Manutenção
