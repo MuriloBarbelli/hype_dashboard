@@ -24,6 +24,15 @@ cause as (
       and e.event_timestamp <= p.open_ts
       and e.event_timestamp >= p.open_ts - interval '30 seconds'
       and e.event_type_code in (177,701,708,311)
+      -- Regra 2: causa deve ser posterior ao ultimo fechamento da mesma porta
+      and e.event_timestamp > coalesce(
+          (select max(e2.event_timestamp)
+           from public.events e2
+           where e2.access_name = p.door_access_name
+             and e2.event_type_code = 167
+             and e2.event_timestamp < p.open_ts),
+          '-infinity'::timestamptz
+      )
     order by e.event_timestamp desc
     limit 1
   ) ce on true
@@ -31,31 +40,22 @@ cause as (
 flags as (
   select
     p.open_event_id,
-
-    /* manteve aberto */
     exists (
-      select 1
-      from public.events e
+      select 1 from public.events e
       where e.access_name = p.door_access_name
         and e.event_timestamp >= p.open_ts
         and e.event_timestamp <= coalesce(p.close_ts, p.open_ts + interval '90 seconds')
         and e.event_type_code = 166
     ) as has_held_open,
-
-    /* falhas típicas (ajuste se você quiser incluir mais códigos) */
     exists (
-      select 1
-      from public.events e
+      select 1 from public.events e
       where e.access_name = p.door_access_name
         and e.event_timestamp >= p.open_ts
         and e.event_timestamp <= coalesce(p.close_ts, p.open_ts + interval '90 seconds')
         and e.event_type_code in (112,113,114)
     ) as has_failed_close,
-
-    /* alerta porta aberta (se 411 existir na sua base) */
     exists (
-      select 1
-      from public.events e
+      select 1 from public.events e
       where e.access_name = p.door_access_name
         and e.event_timestamp >= p.open_ts
         and e.event_timestamp <= coalesce(p.close_ts, p.open_ts + interval '90 seconds')
@@ -69,25 +69,19 @@ select
   p.close_ts,
   p.seconds_open,
   p.door_access_name,
-
   c.cause_event_id,
   c.cause_ts,
   c.cause_code,
   c.cause_desc,
-
-  /* dados do "evento causa" (não do open) */
   c.user_name,
   c.user_profile,
   c.unit,
   c.unit_group,
   c.handler_name,
   c.handler_profile,
-
   f.has_held_open,
   f.has_failed_close,
   f.has_door_alert,
-
-  /* classificação humana */
   case
     when c.cause_code = 701 then 'entrada_facial'
     when c.cause_code = 708 then 'entrada_convidado_facial'
@@ -96,14 +90,22 @@ select
     when c.cause_code is null then 'sem_causa'
     else 'outro'
   end as passage_kind,
-
-  /* confiança (simples e útil pra auditoria) */
   case
-    when c.cause_code is null then 'baixa'
+    when c.cause_code is null                               then 'baixa'
+    -- Regra 1: ciclo sem fechamento reduz confiança
+    when p.close_ts is null and c.cause_code in (701,708)  then 'media'
+    when p.close_ts is null                                 then 'baixa'
+    -- Regra 3: fechamento compartilhado (outro open na mesma porta antes do close)
+    when exists (
+      select 1 from public.events e3
+      where e3.access_name = p.door_access_name
+        and e3.event_type_code = 165
+        and e3.event_timestamp > p.open_ts
+        and e3.event_timestamp < p.close_ts
+    )                                                       then 'media'
     when extract(epoch from (p.open_ts - c.cause_ts)) <= 5 then 'alta'
     else 'media'
   end as confianca_causa
-
 from p
 left join cause c on c.open_event_id = p.open_event_id
 left join flags f on f.open_event_id = p.open_event_id;
