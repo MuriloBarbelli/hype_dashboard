@@ -21,7 +21,8 @@ cause as (
     select e.*
     from public.events e
     where e.access_name = p.door_access_name
-      and e.event_timestamp <= p.open_ts
+      -- P9: aceita facial do mesmo segundo que o open (< +1s, mantém uso de índice)
+      and e.event_timestamp < p.open_ts + interval '1 second'
       and e.event_timestamp >= p.open_ts - interval '30 seconds'
       and e.event_type_code in (177,701,708,311)
       -- Regra 2: causa deve ser posterior ao ultimo fechamento da mesma porta
@@ -95,13 +96,13 @@ select
     -- Regra 1: ciclo sem fechamento reduz confiança
     when p.close_ts is null and c.cause_code in (701,708)  then 'media'
     when p.close_ts is null                                 then 'baixa'
-    -- Regra 3: fechamento compartilhado (outro open na mesma porta antes do close)
+    -- Regra 3: fechamento compartilhado (outro open na mesma porta nos primeiros 5min)
     when exists (
       select 1 from public.events e3
       where e3.access_name = p.door_access_name
         and e3.event_type_code = 165
         and e3.event_timestamp > p.open_ts
-        and e3.event_timestamp < p.close_ts
+        and e3.event_timestamp < least(p.close_ts, p.open_ts + interval '5 minutes')
     )                                                       then 'media'
     when extract(epoch from (p.open_ts - c.cause_ts)) <= 5 then 'alta'
     else 'media'
