@@ -756,10 +756,11 @@ def render_kiper_table_audit(df_raw: pd.DataFrame) -> None:
                 r.get("confianca_causa"),
             )
 
+            _dot_cls = {"alta": "high", "media": "med", "baixa": "low"}.get(str(confianca_label).lower(), "")
             items = (
                 f"<div><b>Categoria:</b> {html.escape(categoria_label)}</div>"
                 f"<div><b>Causa:</b> {html.escape(causa_label)}</div>"
-                f"<div><b>Confiança:</b> <span class='dot'></span>{html.escape(str(confianca_label))}</div>"
+                f"<div><b>Confiança:</b> <span class='dot {_dot_cls}'></span>{html.escape(str(confianca_label))}</div>"
             )
 
             rows_html.append(
