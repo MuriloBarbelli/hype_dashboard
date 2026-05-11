@@ -25,6 +25,9 @@ cause as (
       and e.event_timestamp < p.open_ts + interval '1 second'
       and e.event_timestamp >= p.open_ts - interval '30 seconds'
       and e.event_type_code in (177,701,708,311)
+      -- P4: facial só é causa válida se estiver dentro de 5s antes do open
+      and (e.event_type_code not in (701, 708)
+           or (p.open_ts - e.event_timestamp) <= interval '5 seconds')
       -- Regra 2: causa deve ser posterior ao ultimo fechamento da mesma porta
       and e.event_timestamp > coalesce(
           (select max(e2.event_timestamp)
