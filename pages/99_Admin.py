@@ -110,7 +110,7 @@ def fetch_audit_events_with_passage(
     and (%(door)s = '' or e.access_name ilike ('%%' || %(door)s || '%%'))
 
     and (%(show_ungrouped)s = true or coalesce(a.audit_role,'UNGROUPED') <> 'UNGROUPED')
-    and (%(only_suspicious)s = false or a.confianca_causa in ('media', 'baixa'))
+    and (%(only_suspicious)s = false or a.confianca_causa in ('media', 'baixa') or coalesce(a.audit_role,'UNGROUPED') = 'UNGROUPED')
 
     order by e.event_timestamp {order_dir}
     limit %(limit)s
