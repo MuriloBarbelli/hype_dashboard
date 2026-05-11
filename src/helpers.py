@@ -846,7 +846,7 @@ def format_passage_card(passage_kind, cause_code, confianca=None):
         elif code in (701, 708, 703, 257, 311):
             passage_kind = "entrada_id"
         elif code in (370,):
-            passage_kind = "entrada_sem_id"
+            passage_kind = "intervencao_portaria"
 
     # Categoria amigável + cor
     if passage_kind == "entrada_id":
@@ -858,6 +858,9 @@ def format_passage_card(passage_kind, cause_code, confianca=None):
     elif passage_kind == "saida_sem_id":
         categoria_label = "Saída (sem identificação)"
         categoria_color = "#FDECEC"  # vermelho claro
+    elif passage_kind == "intervencao_portaria":
+        categoria_label = "Intervenção da portaria"
+        categoria_color = "#EDE7F6"  # roxo claro
     else:
         categoria_label = "Passagem"
         categoria_color = "#F0F2F6"  # neutro

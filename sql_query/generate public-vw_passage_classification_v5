@@ -24,7 +24,7 @@ cause as (
       -- P9: aceita facial do mesmo segundo que o open (< +1s, mantém uso de índice)
       and e.event_timestamp < p.open_ts + interval '1 second'
       and e.event_timestamp >= p.open_ts - interval '30 seconds'
-      and e.event_type_code in (177,701,708,311)
+      and e.event_type_code in (177,701,708,311,370)
       -- P4: facial só é causa válida se estiver dentro de 5s antes do open
       and (e.event_type_code not in (701, 708)
            or (p.open_ts - e.event_timestamp) <= interval '5 seconds')
@@ -91,6 +91,7 @@ select
     when c.cause_code = 708 then 'entrada_convidado_facial'
     when c.cause_code = 177 then 'saida_botoeira'
     when c.cause_code = 311 then 'comando_app'
+    when c.cause_code = 370 then 'intervencao_portaria'
     when c.cause_code is null then 'sem_causa'
     else 'outro'
   end as passage_kind,
