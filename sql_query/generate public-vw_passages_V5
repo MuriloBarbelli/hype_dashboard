@@ -20,7 +20,6 @@ closed as (
     where e2.access_name = o.door_access_name
       and e2.event_type_code = 167
       and e2.event_timestamp >= o.open_ts
-      and e2.event_timestamp <= o.open_ts + interval '90 seconds'
     order by e2.event_timestamp
     limit 1
   ) c on true
