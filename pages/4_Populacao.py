@@ -304,7 +304,7 @@ fig_map.add_trace(go.Scatter(
         line=dict(width=1, color="rgba(255,255,255,0.3)"),
     ),
     text=df_map["label"].tolist(),
-    textfont=dict(size=9, color="white"),
+    textfont=dict(size=11, color="white"),
     textposition="middle center",
     customdata=df_map["unit"].tolist(),
     hovertemplate="<b>%{customdata}</b><extra></extra>",
@@ -347,12 +347,12 @@ fig_map.update_layout(
     clickmode="event+select",
 )
 
-col_mapa, col_detalhe = st.columns([3, 2])
+col_mapa, col_detalhe = st.columns([2, 1])
 
 with col_mapa:
     map_event = st.plotly_chart(
         fig_map,
-        use_container_width=True,
+        use_container_width=False,
         on_select="rerun",
         selection_mode="points",
         key="mapa_predio",
