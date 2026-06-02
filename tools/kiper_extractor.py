@@ -28,12 +28,8 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import boto3
 import psycopg2
 import requests
-from botocore import UNSIGNED
-from botocore.config import Config
-from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from psycopg2.extras import execute_values
 
@@ -92,21 +88,25 @@ def _cognito_login() -> str:
     email    = _require_env("KIPER_EMAIL")
     password = _require_env("KIPER_PASSWORD")
 
-    client = boto3.client(
-        "cognito-idp",
-        region_name=COGNITO_REGION,
-        config=Config(signature_version=UNSIGNED),
+    resp = requests.post(
+        f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/",
+        headers={
+            "Content-Type": "application/x-amz-json-1.1",
+            "X-Amz-Target": "AmazonCognitoIdentityProvider.InitiateAuth",
+        },
+        json={
+            "AuthFlow": "USER_PASSWORD_AUTH",
+            "ClientId": COGNITO_CLIENT_ID,
+            "AuthParameters": {"USERNAME": email, "PASSWORD": password},
+        },
+        timeout=30,
     )
-    try:
-        resp = client.initiate_auth(
-            AuthFlow="USER_PASSWORD_AUTH",
-            AuthParameters={"USERNAME": email, "PASSWORD": password},
-            ClientId=COGNITO_CLIENT_ID,
-        )
-    except ClientError as exc:
-        raise RuntimeError(f"Cognito login falhou: {exc}") from exc
 
-    token = resp["AuthenticationResult"]["AccessToken"]
+    if resp.status_code != 200:
+        raise RuntimeError(f"Cognito login falhou: HTTP {resp.status_code} — {resp.text[:300]}")
+
+    body = resp.json()
+    token = body["AuthenticationResult"]["AccessToken"]
     log.info("Cognito login OK — token obtido para %s", email)
     return token
 
