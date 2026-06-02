@@ -5,6 +5,7 @@ PAGES = {
     "Relatórios": "pages/1_Relatorios.py",
     "Visão geral": "pages/2_Visao_Geral.py",
     "Portas": "pages/3_Portas.py",
+    "População": "pages/4_Populacao.py",
     "Usuários (Em Breve)": "pages/4_Usuarios.py",
     "Admin": "pages/99_Admin.py",
 }
