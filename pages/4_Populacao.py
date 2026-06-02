@@ -299,7 +299,7 @@ fig_map.add_trace(go.Scatter(
     mode="markers+text",
     marker=dict(
         symbol="square",
-        size=32,
+        size=38,
         color=df_map["color"].tolist(),
         line=dict(width=1, color="rgba(255,255,255,0.3)"),
     ),
@@ -328,7 +328,7 @@ fig_map.update_layout(
         showgrid=False,
         zeroline=False,
         side="top",
-        range=[0.3, 13.7],
+        range=[0.4, 13.6],
     ),
     yaxis=dict(
         tickvals=andares_unicos,
@@ -336,7 +336,7 @@ fig_map.update_layout(
         title="Andar",
         showgrid=False,
         zeroline=False,
-        autorange=True,  # andar 1 na base, maior andar no topo
+        range=[min(andares_unicos) - 0.4, max(andares_unicos) + 0.4],  # proporcional ao x, marcadores quadrados
     ),
     legend=dict(
         orientation="h",
