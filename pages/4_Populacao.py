@@ -1,4 +1,5 @@
 import html as html_lib
+from datetime import date, timedelta
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -26,6 +27,9 @@ STATUS_LABELS = {
     "fraco":  "Em viagem / presença fraca",
     "vazio":  "Sem entradas registradas",
 }
+MESES_PT = {1:'jan',2:'fev',3:'mar',4:'abr',5:'mai',6:'jun',
+            7:'jul',8:'ago',9:'set',10:'out',11:'nov',12:'dez'}
+
 CLASSIFICACOES = [
     "morador", "locatario", "familiar_cohabitante", "namorado",
     "funcionario_fixo", "visitante_frequente", "erro_cadastro", "outro",
@@ -122,12 +126,28 @@ def load_evolucao(unidades: frozenset) -> pd.DataFrame:
 def load_detalhes_apto(unit_str: str) -> pd.DataFrame:
     rows = fetch_df("""
         SELECT
-            user_name, user_profile, classificacao_auto, classificacao_efetiva,
-            alerta, media_dias_por_mes, meses_residente_recente,
-            ultimo_mes_com_entrada, classificacao_manual, confidence, notas_revisao
-        FROM vw_resident_classification
-        WHERE unit = %(unit)s
-        ORDER BY media_dias_por_mes DESC NULLS LAST
+            v.user_name, v.user_profile, v.classificacao_auto, v.classificacao_efetiva,
+            v.alerta, v.media_dias_por_mes, v.meses_residente_recente,
+            v.ultimo_mes_com_entrada, v.classificacao_manual, v.confidence,
+            v.notas_revisao, v.total_meses,
+            (
+                SELECT COUNT(DISTINCT DATE(e2.event_timestamp))
+                FROM public.events e2
+                WHERE e2.user_name = v.user_name
+                  AND e2.unit = %(unit)s
+                  AND e2.event_type_code IN (701, 708, 311, 183)
+                  AND e2.access_name IN (
+                      '6062 Portão Pedestre Interno',
+                      '6064 Hall Residencial',
+                      '6061 Portão Pedestre Externo',
+                      '6063 Hall NR'
+                  )
+                  AND DATE_TRUNC('month', e2.event_timestamp) =
+                      DATE_TRUNC('month', NOW() - INTERVAL '1 month')
+            ) AS dias_ultimo_mes
+        FROM vw_resident_classification v
+        WHERE v.unit = %(unit)s
+        ORDER BY v.media_dias_por_mes DESC NULLS LAST
     """, {"unit": unit_str})
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
@@ -240,6 +260,88 @@ def _detectar_duplicatas(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         linhas.append(r)
 
     return pd.DataFrame(linhas).drop(columns=["_norm"]), avisos
+
+
+def _fmt_mes(d) -> str:
+    try:
+        return f"{MESES_PT[d.month]}/{str(d.year)[2:]}"
+    except (AttributeError, KeyError, TypeError):
+        return str(d) if d else "?"
+
+
+def _freq_html(row: pd.Series, mes_label: str) -> str:
+    total_meses  = int(row.get("total_meses") or 0)
+    media        = row.get("media_dias_por_mes")
+    dias_ultimo  = int(row.get("dias_ultimo_mes") or 0)
+    ultimo_mes   = row.get("ultimo_mes_com_entrada")
+
+    if total_meses == 1 and not dias_ultimo:
+        mes_str = _fmt_mes(ultimo_mes)
+        return f"Visita única em {mes_str}"
+
+    parts: list[str] = []
+    if media is not None:
+        sufixo = " (visita única)" if total_meses == 1 else " (média)"
+        parts.append(f"{media:.1f} dias/mês{sufixo}")
+    if dias_ultimo:
+        parts.append(f"{dias_ultimo} dias em {mes_label}")
+    return " &nbsp;·&nbsp; ".join(parts) if parts else "sem dados"
+
+
+def _build_card_html(row: pd.Series, mes_label: str) -> str:
+    nome        = html_lib.escape(str(row["user_name"]))
+    perfis_str  = row.get("user_profile") or ""
+    cls_ef      = row.get("classificacao_efetiva") or ""
+    cls_man     = row.get("classificacao_manual")
+    alerta      = row.get("alerta")
+    is_dup      = row.get("_is_dup", False)
+
+    # badges de perfil
+    badges = " ".join(
+        _profile_badge(p.strip()) for p in perfis_str.split(",") if p.strip()
+    ) or _profile_badge(None)
+    if is_dup:
+        badges += (
+            " <span style='background:#E24B4A;color:#fff;padding:2px 8px;"
+            "border-radius:12px;font-size:11px;font-weight:500;'>duplicata</span>"
+        )
+
+    # linha de frequência
+    freq = _freq_html(row, mes_label)
+
+    # classificação + frequência
+    cls_text = html_lib.escape(_cls_badge(cls_ef))
+    info_line = f"{cls_text} &nbsp;·&nbsp; {freq}"
+
+    # blocos opcionais
+    alerta_block = ""
+    if alerta:
+        alerta_text = html_lib.escape(str(alerta))
+        alerta_block = (
+            f"<div style='margin-top:6px;padding:4px 10px;background:#FFF3CD;"
+            f"border-left:3px solid #EF9F27;border-radius:4px;"
+            f"font-size:12px;color:#7a5200;'>⚠ {alerta_text}</div>"
+        )
+    cls_man_block = ""
+    if cls_man:
+        cls_man_text = html_lib.escape(str(cls_man))
+        cls_man_block = (
+            f"<div style='margin-top:6px;padding:4px 10px;background:#E8F5E9;"
+            f"border-left:3px solid #1D9E75;border-radius:4px;"
+            f"font-size:12px;color:#1a5c38;'>✔ {cls_man_text}</div>"
+        )
+
+    return (
+        f"<div style='border:1px solid #e0e0e0;border-radius:8px;padding:12px 14px;"
+        f"margin-bottom:8px;background:#fff;'>"
+        f"<div style='display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:5px;'>"
+        f"<span style='font-weight:600;font-size:14px;color:#111;'>{nome}</span>"
+        f"{badges}"
+        f"</div>"
+        f"<div style='font-size:12px;color:#555;'>{info_line}</div>"
+        f"{alerta_block}{cls_man_block}"
+        f"</div>"
+    )
 
 
 def _alerta_prio(txt: str | None) -> int:
@@ -438,11 +540,7 @@ div[data-testid="column"]:nth-child(2) {
     flex: 1 1 auto !important;
     min-width: 360px !important;
 }
-div[data-testid="column"]:nth-child(2) > div[data-testid="stVerticalBlock"] {
-    max-height: 680px;
-    overflow-y: auto;
-    padding-right: 4px;
-}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -468,6 +566,10 @@ if map_event and getattr(map_event, "selection", None):
 apto_sel: str | None = st.session_state.get("apto_selecionado")
 
 # ─── Painel de detalhes do apartamento ───────────────────────────────────────
+# label do mês anterior para exibição (ex: "mai/26")
+_mes_ant = (date.today().replace(day=1) - timedelta(days=1))
+MES_LABEL = f"{MESES_PT[_mes_ant.month]}/{str(_mes_ant.year)[2:]}"
+
 with col_detalhe:
     if not apto_sel:
         st.markdown(
@@ -484,7 +586,7 @@ with col_detalhe:
         if df_det.empty:
             st.info("Nenhum registro encontrado para este apartamento.")
         else:
-            # preserva nomes reais antes do anon (para INSERT e para detecção de dupl.)
+            # preserva nomes reais antes do anon
             df_det["_nome_real"] = df_det["user_name"]
             if not is_real:
                 df_det = _apply_anon(df_det, anon_map)
@@ -495,74 +597,54 @@ with col_detalhe:
             for aviso in dup_avisos:
                 st.warning(aviso)
 
-            for _, row in df_det.iterrows():
-                nome_exib   = row["user_name"]
-                nome_real   = row.get("_nome_real") or nome_exib
-                perfis_str  = row.get("user_profile") or ""
-                cls_efetiva = row.get("classificacao_efetiva") or ""
-                cls_manual  = row.get("classificacao_manual")
-                alerta      = row.get("alerta")
-                media_dias  = row.get("media_dias_por_mes")
-                meses_rec   = row.get("meses_residente_recente")
-                is_dup      = row.get("_is_dup", False)
+            # ── cards como HTML puro dentro de div scrollável ──────────────
+            cards_html = "".join(
+                _build_card_html(row, MES_LABEL)
+                for _, row in df_det.iterrows()
+            )
+            st.markdown(
+                f"<div style='height:620px;overflow-y:auto;padding-right:8px;'>"
+                f"{cards_html}</div>",
+                unsafe_allow_html=True,
+            )
 
-                # badges de perfil (pode ser múltiplos se duplicata)
-                badges_html = " ".join(
-                    _profile_badge(p.strip())
-                    for p in perfis_str.split(",")
-                    if p.strip()
-                ) or _profile_badge(None)
-                if is_dup:
-                    badges_html += (
-                        " <span style='background:#E24B4A;color:#fff;padding:2px 9px;"
-                        "border-radius:12px;font-size:11px;font-weight:500;'>duplicata</span>"
-                    )
-
-                with st.container(border=True):
-                    st.markdown(f"**{html_lib.escape(nome_exib)}**", unsafe_allow_html=False)
-                    st.markdown(badges_html, unsafe_allow_html=True)
-                    st.caption(
-                        f"{_cls_badge(cls_efetiva)}"
-                        + (f" &nbsp;|&nbsp; {media_dias:.1f} dias/mês" if media_dias else "")
-                        + (f" &nbsp;|&nbsp; {meses_rec} meses rec." if meses_rec else "")
-                    )
-                    if cls_manual:
-                        st.success(f"✔ {cls_manual}", icon=None)
-                    if alerta:
-                        st.warning(alerta)
-
-                    # Formulário de revisão — só no modo real, só para alertas não resolvidos
-                    if is_real and alerta and not cls_manual:
-                        form_key = f"rev_{apto_sel}_{nome_real}"
-                        with st.form(key=form_key, border=False):
-                            st.caption(f"Revisar: **{nome_exib}**")
-                            col_cls, col_conf = st.columns(2)
-                            nova_cls  = col_cls.selectbox(
-                                "Classificação", CLASSIFICACOES, key=f"cls_{form_key}"
-                            )
-                            nova_conf = col_conf.radio(
-                                "Confiança", CONFIDENCIAS, horizontal=True, key=f"conf_{form_key}"
-                            )
-                            notas = st.text_input("Observações (opcional)", key=f"notas_{form_key}")
-                            if st.form_submit_button("Salvar revisão", type="primary"):
-                                fetch_df("""
-                                    INSERT INTO resident_review
-                                        (user_name, unit, classification, confidence,
-                                         notes, reviewed_at, reviewed_by)
-                                    VALUES
-                                        (%(user_name)s, %(unit)s, %(classification)s,
-                                         %(confidence)s, %(notes)s, NOW(), 'sindico')
-                                    ON CONFLICT DO NOTHING
-                                """, {
-                                    "user_name":      nome_real,
-                                    "unit":           apto_sel,
-                                    "classification": nova_cls,
-                                    "confidence":     nova_conf,
-                                    "notes":          notas or None,
-                                })
-                                st.success("Revisão salva!")
-                                st.cache_data.clear()
-                                st.rerun()
+            # ── formulários de revisão abaixo do scroll (só modo real) ─────
+            if is_real:
+                for _, row in df_det.iterrows():
+                    if not (row.get("alerta") and not row.get("classificacao_manual")):
+                        continue
+                    nome_exib = row["user_name"]
+                    nome_real = row.get("_nome_real") or nome_exib
+                    form_key  = f"rev_{apto_sel}_{nome_real}"
+                    st.markdown(f"**Revisão — {nome_exib}**")
+                    with st.form(key=form_key, border=True):
+                        col_cls, col_conf = st.columns(2)
+                        nova_cls  = col_cls.selectbox(
+                            "Classificação", CLASSIFICACOES, key=f"cls_{form_key}"
+                        )
+                        nova_conf = col_conf.radio(
+                            "Confiança", CONFIDENCIAS, horizontal=True, key=f"conf_{form_key}"
+                        )
+                        notas = st.text_input("Observações (opcional)", key=f"notas_{form_key}")
+                        if st.form_submit_button("Salvar revisão", type="primary"):
+                            fetch_df("""
+                                INSERT INTO resident_review
+                                    (user_name, unit, classification, confidence,
+                                     notes, reviewed_at, reviewed_by)
+                                VALUES
+                                    (%(user_name)s, %(unit)s, %(classification)s,
+                                     %(confidence)s, %(notes)s, NOW(), 'sindico')
+                                ON CONFLICT DO NOTHING
+                            """, {
+                                "user_name":      nome_real,
+                                "unit":           apto_sel,
+                                "classification": nova_cls,
+                                "confidence":     nova_conf,
+                                "notes":          notas or None,
+                            })
+                            st.success("Revisão salva!")
+                            st.cache_data.clear()
+                            st.rerun()
 
 # ─── Fila de alertas ─────────────────────────────────────────────────────────
 st.divider()
