@@ -1,10 +1,11 @@
+import html as html_lib
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
 from src.db import fetch_df
 from ui.sidebar import render_sidebar_menu
-from src.helpers import init_state, apply_plot_theme
+from src.helpers import init_state, apply_plot_theme, get_profile_color, canonical_profile
 
 # ─── Configuração ─────────────────────────────────────────────────────────────
 st.set_page_config(page_title="População • Hype", layout="wide")
@@ -160,6 +161,85 @@ def _cls_badge(c: str | None) -> str:
         "presenca_regular": "🟡 Presença regular",
         "visitante":        "⚪ Visitante",
     }.get(c or "", c or "—")
+
+
+def _profile_badge(profile: str | None) -> str:
+    """Badge HTML com cor canônica do perfil, idêntica ao kiper_badge do projeto."""
+    canon = canonical_profile(profile or "")
+    bg = get_profile_color(canon, "#607d8b")
+    label = html_lib.escape(canon if canon != "Sem perfil" else (profile or "—"))
+    return (
+        f"<span style='background:{bg};color:#fff;padding:2px 9px;"
+        f"border-radius:12px;font-size:11px;font-weight:500;white-space:nowrap;'>"
+        f"{label}</span>"
+    )
+
+
+def _detectar_duplicatas(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Colapsa linhas que provavelmente são a mesma pessoa física."""
+    if df.empty:
+        return df, []
+
+    df = df.copy().reset_index(drop=True)
+    df["_norm"] = df["user_name"].str.strip().str.lower()
+
+    avisos: list[str] = []
+    grupos: list[list[int]] = []
+    usado: set[int] = set()
+
+    for i in range(len(df)):
+        if i in usado:
+            continue
+        grupo = [i]
+        ni = df.at[i, "_norm"]
+        for j in range(i + 1, len(df)):
+            if j in usado:
+                continue
+            nj = df.at[j, "_norm"]
+            # (a) mesmo nome, perfil diferente
+            if ni == nj and df.at[i, "user_profile"] != df.at[j, "user_profile"]:
+                grupo.append(j)
+            # (b) um nome contém o outro (min 4 chars para evitar falsos positivos)
+            elif len(ni) >= 4 and len(nj) >= 4 and (ni in nj or nj in ni):
+                grupo.append(j)
+        grupos.append(grupo)
+        usado.update(grupo)
+
+    linhas: list[dict] = []
+    for grupo in grupos:
+        rows = df.iloc[grupo]
+        if len(grupo) == 1:
+            r = rows.iloc[0].to_dict()
+            r["_is_dup"] = False
+            linhas.append(r)
+            continue
+
+        perfis = ", ".join(p for p in rows["user_profile"].dropna().unique() if p)
+        nome_principal = rows["user_name"].iloc[0]
+        media = float(rows["media_dias_por_mes"].fillna(0).sum())
+        alerta    = next((v for v in rows["alerta"] if pd.notna(v)), None)
+        cls_ef    = next((v for v in rows["classificacao_efetiva"] if pd.notna(v)), "")
+        cls_man   = next((v for v in rows["classificacao_manual"] if pd.notna(v)), None)
+        meses_rec = rows["meses_residente_recente"].max()
+        nome_real = rows["_nome_real"].iloc[0] if "_nome_real" in rows.columns else nome_principal
+
+        avisos.append(
+            f"⚠️ Possível cadastro duplicado: **{nome_principal}** aparece com "
+            f"{len(grupo)} perfis diferentes ({perfis}). Os registros foram unificados."
+        )
+
+        r = rows.iloc[0].to_dict()
+        r["user_profile"]            = perfis
+        r["media_dias_por_mes"]      = media if media > 0 else None
+        r["alerta"]                  = alerta
+        r["classificacao_efetiva"]   = cls_ef
+        r["classificacao_manual"]    = cls_man
+        r["meses_residente_recente"] = meses_rec
+        r["_nome_real"]              = nome_real
+        r["_is_dup"]                 = True
+        linhas.append(r)
+
+    return pd.DataFrame(linhas).drop(columns=["_norm"]), avisos
 
 
 def _alerta_prio(txt: str | None) -> int:
@@ -358,6 +438,11 @@ div[data-testid="column"]:nth-child(2) {
     flex: 1 1 auto !important;
     min-width: 360px !important;
 }
+div[data-testid="column"]:nth-child(2) > div[data-testid="stVerticalBlock"] {
+    max-height: 680px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -396,27 +481,46 @@ with col_detalhe:
         st.markdown(f"**Apartamento {num_sel}**")
         df_det = load_detalhes_apto(apto_sel)
 
-        # guarda nomes reais antes do anon (necessário para o INSERT)
-        nomes_reais = df_det["user_name"].tolist() if not df_det.empty else []
-
-        if not is_real:
-            df_det = _apply_anon(df_det, anon_map)
-
         if df_det.empty:
             st.info("Nenhum registro encontrado para este apartamento.")
         else:
-            for i, (_, row) in enumerate(df_det.iterrows()):
+            # preserva nomes reais antes do anon (para INSERT e para detecção de dupl.)
+            df_det["_nome_real"] = df_det["user_name"]
+            if not is_real:
+                df_det = _apply_anon(df_det, anon_map)
+
+            # detecta e colapsa duplicatas
+            df_det, dup_avisos = _detectar_duplicatas(df_det)
+
+            for aviso in dup_avisos:
+                st.warning(aviso)
+
+            for _, row in df_det.iterrows():
                 nome_exib   = row["user_name"]
-                nome_real   = nomes_reais[i]
-                perfil      = row.get("user_profile") or "—"
+                nome_real   = row.get("_nome_real") or nome_exib
+                perfis_str  = row.get("user_profile") or ""
                 cls_efetiva = row.get("classificacao_efetiva") or ""
                 cls_manual  = row.get("classificacao_manual")
                 alerta      = row.get("alerta")
                 media_dias  = row.get("media_dias_por_mes")
                 meses_rec   = row.get("meses_residente_recente")
+                is_dup      = row.get("_is_dup", False)
+
+                # badges de perfil (pode ser múltiplos se duplicata)
+                badges_html = " ".join(
+                    _profile_badge(p.strip())
+                    for p in perfis_str.split(",")
+                    if p.strip()
+                ) or _profile_badge(None)
+                if is_dup:
+                    badges_html += (
+                        " <span style='background:#E24B4A;color:#fff;padding:2px 9px;"
+                        "border-radius:12px;font-size:11px;font-weight:500;'>duplicata</span>"
+                    )
 
                 with st.container(border=True):
-                    st.markdown(f"**{nome_exib}** &nbsp;·&nbsp; _{perfil}_")
+                    st.markdown(f"**{html_lib.escape(nome_exib)}**", unsafe_allow_html=False)
+                    st.markdown(badges_html, unsafe_allow_html=True)
                     st.caption(
                         f"{_cls_badge(cls_efetiva)}"
                         + (f" &nbsp;|&nbsp; {media_dias:.1f} dias/mês" if media_dias else "")
