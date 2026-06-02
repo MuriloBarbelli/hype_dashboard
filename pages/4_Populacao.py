@@ -347,7 +347,21 @@ fig_map.update_layout(
     clickmode="event+select",
 )
 
-col_mapa, col_detalhe = st.columns([2, 1])
+st.markdown("""
+<style>
+div[data-testid="column"]:nth-child(1) {
+    flex: 0 0 auto !important;
+    width: fit-content !important;
+    min-width: 0 !important;
+}
+div[data-testid="column"]:nth-child(2) {
+    flex: 1 1 auto !important;
+    min-width: 360px !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+col_mapa, col_detalhe = st.columns([1, 1])
 
 with col_mapa:
     map_event = st.plotly_chart(
