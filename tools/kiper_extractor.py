@@ -40,6 +40,7 @@ load_dotenv(ROOT / ".env")
 
 from src.ingest import normalize_kiper_csv, read_kiper_csv  # noqa: E402
 from src.db import build_event_audit_map_for_source_file   # noqa: E402
+from tools.update_user_anon_map import main as update_user_anon_map  # noqa: E402
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constantes
@@ -463,6 +464,11 @@ def run(start: date, end: date, days_override: list = None) -> None:
             log.info("  audit map: %s", csv_path.name)
             build_event_audit_map_for_source_file(csv_path.name, conn=conn)
         log.info("Event_audit_map atualizado.")
+
+        # ── 6. Atualiza mapeamentos de anonimização de usuários ────────────
+        log.info("Atualizando user_anon_map…")
+        update_user_anon_map()
+        log.info("user_anon_map atualizado.")
 
     finally:
         conn.close()
