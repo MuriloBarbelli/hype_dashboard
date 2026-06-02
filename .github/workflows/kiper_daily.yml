@@ -18,6 +18,8 @@ jobs:
 
     env:
       KIPER_AUTHORIZATION:           ${{ secrets.KIPER_AUTHORIZATION }}
+      KIPER_EMAIL:                   ${{ secrets.KIPER_EMAIL }}
+      KIPER_PASSWORD:                ${{ secrets.KIPER_PASSWORD }}
       KIPER_REFRESH:                 ${{ secrets.KIPER_REFRESH }}
       KIPER_TOPCONTEXTID:            ${{ secrets.KIPER_TOPCONTEXTID }}
       KIPER_TOPNODEID:               ${{ secrets.KIPER_TOPNODEID }}
