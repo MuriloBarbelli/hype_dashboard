@@ -361,7 +361,7 @@ else:
             y=df_day["passagens"],
             marker=dict(
                 color=df_day["passagens"],
-                colorscale="Blues",
+                colorscale=[[0, "#5B9BD5"], [1, "#1565C0"]],
                 line=dict(width=0)
             ),
             hovertemplate="Dia: %{x|%d/%m}<br>Passagens: %{y}<extra></extra>",
