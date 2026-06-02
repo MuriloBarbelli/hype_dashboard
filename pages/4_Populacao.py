@@ -288,7 +288,7 @@ fig_map = go.Figure()
 for st_key, color in STATUS_COLORS.items():
     fig_map.add_trace(go.Scatter(
         x=[None], y=[None], mode="markers",
-        marker=dict(symbol="square", size=11, color=color),
+        marker=dict(symbol="square", size=12, color=color),
         name=STATUS_LABELS[st_key],
     ))
 
@@ -299,12 +299,12 @@ fig_map.add_trace(go.Scatter(
     mode="markers+text",
     marker=dict(
         symbol="square",
-        size=22,
+        size=32,
         color=df_map["color"].tolist(),
-        line=dict(width=1, color="rgba(255,255,255,0.25)"),
+        line=dict(width=1, color="rgba(255,255,255,0.3)"),
     ),
     text=df_map["label"].tolist(),
-    textfont=dict(size=7, color="white"),
+    textfont=dict(size=9, color="white"),
     textposition="middle center",
     customdata=df_map["unit"].tolist(),
     hovertemplate="<b>%{customdata}</b><extra></extra>",
@@ -315,18 +315,20 @@ finais_unicos  = sorted(df_map["final"].unique())
 andares_unicos = sorted(df_map["andar"].unique())  # ascendente: andar 1 na base, 17 no topo
 
 fig_map.update_layout(
-    height=max(340, len(andares_unicos) * 38),
-    margin=dict(l=35, r=10, t=50, b=20),
+    width=680,
+    height=max(380, len(andares_unicos) * 38),
+    margin=dict(l=40, r=10, t=40, b=40),
     template="simple_white",
     plot_bgcolor="rgba(248,248,248,1)",
     xaxis=dict(
         tickvals=finais_unicos,
         ticktext=[f"{f:02d}" for f in finais_unicos],
+        dtick=1,
         title=None,
         showgrid=False,
         zeroline=False,
         side="top",
-        range=[min(finais_unicos) - 0.7, max(finais_unicos) + 0.7],
+        range=[0.3, 13.7],
     ),
     yaxis=dict(
         tickvals=andares_unicos,
