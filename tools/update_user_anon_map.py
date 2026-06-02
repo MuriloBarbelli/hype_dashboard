@@ -7,8 +7,7 @@ mapeamento de anonimização.
 Colunas da tabela:
   user_name_real  — nome original
   user_name_anon  — codinome gerado
-  user_name_norm  — replica norm_text() do Postgres: lower + trim + espaços colapsados
-                    (é esse campo que vw_events_anon usa no JOIN)
+  user_name_norm  — replica exata do norm_text() do Postgres (ver função abaixo)
 
 Pode rodar quantas vezes quiser — idempotente.
 """
@@ -19,11 +18,20 @@ load_dotenv()
 import os
 import random
 import re
+import psycopg2
 from supabase import create_client
 
 SUPABASE_URL              = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 ANON_SEED                 = os.environ["ANON_SEED"]
+
+# Perfis que a vw_events_anon mantém com nome real — não precisam de codinome
+FUNCTIONAL_PROFILES = {
+    'porteiro monitoramento', 'funcionário', 'zelador', 'gestor de condomínio'
+}
+
+# Norms bloqueadas pelo trigger trg_block_never_anon_users no banco
+BLOCKED_NORMS = {'portaria principal'}
 
 FIRST_NAMES = [
     "Frederico","Bruno","Thiago","Rafael","Eduardo","Gustavo","Henrique","Felipe",
@@ -38,10 +46,15 @@ LAST_NAMES = [
     "Miranda","Rezende","Tavares","Vasconcelos","Moura","Cavalcanti"
 ]
 
+_ACCENT_TABLE = str.maketrans(
+    'ÁÀÂÃÄáàâãäÉÈÊËéèêëÍÌÎÏíìîïÓÒÔÕÖóòôõöÚÙÛÜúùûüÇç',
+    'AAAAAaaaaaEEEEeeeeIIIIiiiiOOOOOoooooUUUUuuuuCc'
+)
+
 
 def norm_text(s: str) -> str:
-    """Replica norm_text() do Postgres: lower + trim + espaços colapsados."""
-    return re.sub(r"\s+", " ", s.strip()).lower()
+    """Replica exata de norm_text() do Postgres: trim + translate (remove acentos) + colapsa espaços + lower."""
+    return re.sub(r"\s+", " ", s.strip().translate(_ACCENT_TABLE)).lower()
 
 
 def make_name(rng: random.Random) -> str:
@@ -53,29 +66,59 @@ def make_name(rng: random.Random) -> str:
     return f"{first} {last1}"
 
 
+def _get_db_conn():
+    return psycopg2.connect(
+        host=os.environ["DB_HOST"],
+        port=int(os.environ.get("DB_PORT", 5432)),
+        dbname=os.environ["DB_NAME"],
+        user=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"],
+        sslmode=os.environ.get("DB_SSLMODE", "require"),
+        connect_timeout=15,
+    )
+
+
 def main():
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-    # 1) nomes distintos em events (não nulos, não vazios)
-    rows = supabase.table("events").select("user_name").neq("user_name", None).execute().data
-    real_names = sorted({
-        r["user_name"].strip()
-        for r in rows
-        if r.get("user_name") and r["user_name"].strip()
-    })
-    print(f"[INFO] {len(real_names)} nomes distintos em events.")
+    # 1) nomes distintos em events com perfil não-funcional — via psycopg2 (evita timeout do REST)
+    functional_list = tuple(FUNCTIONAL_PROFILES)
+    conn = _get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT user_name
+                FROM public.events
+                WHERE user_name IS NOT NULL
+                  AND btrim(user_name) <> ''
+                  AND lower(coalesce(user_profile, '')) NOT IN %s
+            """, (functional_list,))
+            real_names = sorted(row[0].strip() for row in cur.fetchall() if row[0].strip())
+    finally:
+        conn.close()
 
-    # 2) mapeamentos já existentes — verifica por norm E por nome real (PK)
-    existing = supabase.table("user_anon_map").select("user_name_real,user_name_norm,user_name_anon").execute().data
-    mapped_norms = {r["user_name_norm"] for r in existing if r.get("user_name_norm")}
-    mapped_reals = {r["user_name_real"] for r in existing if r.get("user_name_real")}
-    used_anons   = {r["user_name_anon"] for r in existing if r.get("user_name_anon")}
+    print(f"[INFO] {len(real_names)} nomes distintos com perfil não-funcional em events.")
 
-    # 3) quais ainda não foram mapeados (nem pela norm nem pelo nome real)
+    # 2) mapeamentos já existentes — via psycopg2 (sem limite de 1000 linhas do REST)
+    conn = _get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_name_real, user_name_norm, user_name_anon FROM public.user_anon_map")
+            rows_map = cur.fetchall()
+    finally:
+        conn.close()
+
+    mapped_norms = {r[1] for r in rows_map if r[1]}
+    mapped_reals = {r[0] for r in rows_map if r[0]}
+    used_anons   = {r[2] for r in rows_map if r[2]}
+
+    # 3) quais ainda não foram mapeados — pula norms bloqueadas pelo trigger
     missing = [
         (rn, norm_text(rn))
         for rn in real_names
-        if norm_text(rn) not in mapped_norms and rn not in mapped_reals
+        if norm_text(rn) not in mapped_norms
+        and rn not in mapped_reals
+        and norm_text(rn) not in BLOCKED_NORMS
     ]
     print(f"[INFO] {len(missing)} usuários sem mapeamento.")
 
