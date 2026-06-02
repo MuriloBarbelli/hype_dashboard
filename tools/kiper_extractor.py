@@ -113,7 +113,7 @@ def _cognito_login() -> str:
 
 def _get_token() -> str:
     raw = (os.environ.get("KIPER_AUTHORIZATION") or "").strip()
-    if raw:
+    if raw and raw.upper() != "DISABLED" and raw.lower().startswith("bearer "):
         return raw.removeprefix("Bearer ").removeprefix("bearer ").strip()
     return _cognito_login()
 
