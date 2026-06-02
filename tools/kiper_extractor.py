@@ -28,8 +28,12 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import boto3
 import psycopg2
 import requests
+from botocore import UNSIGNED
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from psycopg2.extras import execute_values
 
@@ -49,6 +53,9 @@ KIPER_URL     = "https://server-monitoring.cloud.kiper.com.br/graphql"
 KIPER_APP_KEY = "91530d8e55134111b7c422e495d199bc"
 REPORT_ID     = 2       # relatório de eventos
 IS_CUSTOM     = False   # flag exigida pela API
+
+COGNITO_CLIENT_ID = "6rqnt74rprdf0qeuvcsf1rh4f0"
+COGNITO_REGION    = "us-west-2"
 
 # filterId 9 = data inicial | filterId 10 = data final | filterId 7 = topnodeid
 FILTER_ID_START   = "9"
@@ -80,13 +87,35 @@ log = logging.getLogger(__name__)
 # Auth / headers
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _cognito_login() -> str:
+    """Autentica com KIPER_EMAIL + KIPER_PASSWORD via Cognito USER_PASSWORD_AUTH."""
+    email    = _require_env("KIPER_EMAIL")
+    password = _require_env("KIPER_PASSWORD")
+
+    client = boto3.client(
+        "cognito-idp",
+        region_name=COGNITO_REGION,
+        config=Config(signature_version=UNSIGNED),
+    )
+    try:
+        resp = client.initiate_auth(
+            AuthFlow="USER_PASSWORD_AUTH",
+            AuthParameters={"USERNAME": email, "PASSWORD": password},
+            ClientId=COGNITO_CLIENT_ID,
+        )
+    except ClientError as exc:
+        raise RuntimeError(f"Cognito login falhou: {exc}") from exc
+
+    token = resp["AuthenticationResult"]["AccessToken"]
+    log.info("Cognito login OK — token obtido para %s", email)
+    return token
+
+
 def _get_token() -> str:
     raw = os.environ.get("KIPER_AUTHORIZATION") or ""
-    if not raw:
-        raise RuntimeError(
-            "KIPER_AUTHORIZATION não encontrado. Defina no .env."
-        )
-    return raw.removeprefix("Bearer ").removeprefix("bearer ").strip()
+    if raw:
+        return raw.removeprefix("Bearer ").removeprefix("bearer ").strip()
+    return _cognito_login()
 
 
 def _require_env(key: str) -> str:
@@ -173,6 +202,15 @@ def fetch_kiper_csv(day: date) -> str:
 
     if "errors" in body:
         err = body["errors"]
+        for e in err:
+            error_type = str(e.get("errorType", "")).upper()
+            message    = str(e.get("message", "")).upper()
+            if "UNAUTHENTICATED" in error_type or "UNAUTHENTICATED" in message:
+                raise RuntimeError(
+                    f"UNAUTHENTICATED: token inválido ou expirado. "
+                    f"{e.get('message', '')} — atualize KIPER_AUTHORIZATION "
+                    f"ou defina KIPER_EMAIL + KIPER_PASSWORD no .env."
+                )
         # tenta decodificar buffer de erro do .NET
         for e in err:
             ext = e.get("extensions", {})
@@ -380,6 +418,11 @@ def run(start: date, end: date, days_override: list = None) -> None:
             log.info("[%s] Baixando do Kiper (00:00 – 23:59)…", day)
             try:
                 csv_text = fetch_kiper_csv(day)
+            except RuntimeError as exc:
+                if "UNAUTHENTICATED" in str(exc):
+                    raise
+                log.error("[%s] ERRO ao baixar: %s", day, exc)
+                continue
             except Exception as exc:
                 log.error("[%s] ERRO ao baixar: %s", day, exc)
                 continue
