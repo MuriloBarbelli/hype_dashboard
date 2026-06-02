@@ -65,13 +65,18 @@ def main():
     })
     print(f"[INFO] {len(real_names)} nomes distintos em events.")
 
-    # 2) mapeamentos já existentes indexados por user_name_norm
-    existing = supabase.table("user_anon_map").select("user_name_norm,user_name_anon").execute().data
-    mapped_norms = {r["user_name_norm"] for r in existing}
-    used_anons   = {r["user_name_anon"] for r in existing}
+    # 2) mapeamentos já existentes — verifica por norm E por nome real (PK)
+    existing = supabase.table("user_anon_map").select("user_name_real,user_name_norm,user_name_anon").execute().data
+    mapped_norms = {r["user_name_norm"] for r in existing if r.get("user_name_norm")}
+    mapped_reals = {r["user_name_real"] for r in existing if r.get("user_name_real")}
+    used_anons   = {r["user_name_anon"] for r in existing if r.get("user_name_anon")}
 
-    # 3) quais ainda não foram mapeados
-    missing = [(rn, norm_text(rn)) for rn in real_names if norm_text(rn) not in mapped_norms]
+    # 3) quais ainda não foram mapeados (nem pela norm nem pelo nome real)
+    missing = [
+        (rn, norm_text(rn))
+        for rn in real_names
+        if norm_text(rn) not in mapped_norms and rn not in mapped_reals
+    ]
     print(f"[INFO] {len(missing)} usuários sem mapeamento.")
 
     if not missing:
@@ -103,10 +108,10 @@ def main():
                 "user_name_norm": norm,
             })
 
-    # 5) insere em lotes
+    # 5) insere em lotes — ignore_duplicates como rede de segurança
     BATCH = 500
     for i in range(0, len(inserts), BATCH):
-        supabase.table("user_anon_map").insert(inserts[i : i + BATCH]).execute()
+        supabase.table("user_anon_map").upsert(inserts[i : i + BATCH], ignore_duplicates=True).execute()
 
     print(f"[OK] Inseridos {len(inserts)} novos mapeamentos em user_anon_map.")
 
