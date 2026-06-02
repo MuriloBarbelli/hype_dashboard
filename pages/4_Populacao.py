@@ -288,7 +288,7 @@ fig_map = go.Figure()
 for st_key, color in STATUS_COLORS.items():
     fig_map.add_trace(go.Scatter(
         x=[None], y=[None], mode="markers",
-        marker=dict(symbol="square", size=13, color=color),
+        marker=dict(symbol="square", size=11, color=color),
         name=STATUS_LABELS[st_key],
     ))
 
@@ -299,33 +299,34 @@ fig_map.add_trace(go.Scatter(
     mode="markers+text",
     marker=dict(
         symbol="square",
-        size=34,
+        size=22,
         color=df_map["color"].tolist(),
         line=dict(width=1, color="rgba(255,255,255,0.25)"),
     ),
     text=df_map["label"].tolist(),
-    textfont=dict(size=9, color="white"),
+    textfont=dict(size=7, color="white"),
     textposition="middle center",
     customdata=df_map["unit"].tolist(),
     hovertemplate="<b>%{customdata}</b><extra></extra>",
     showlegend=False,
 ))
 
-finais_unicos = sorted(df_map["final"].unique())
-andares_unicos = sorted(df_map["andar"].unique(), reverse=True)  # andar 17 no topo
+finais_unicos  = sorted(df_map["final"].unique())
+andares_unicos = sorted(df_map["andar"].unique())  # ascendente: andar 1 na base, 17 no topo
 
 fig_map.update_layout(
-    height=max(380, len(andares_unicos) * 52),
-    margin=dict(l=40, r=20, t=50, b=30),
+    height=max(340, len(andares_unicos) * 38),
+    margin=dict(l=35, r=10, t=50, b=20),
     template="simple_white",
     plot_bgcolor="rgba(248,248,248,1)",
     xaxis=dict(
         tickvals=finais_unicos,
         ticktext=[f"{f:02d}" for f in finais_unicos],
-        title="Final",
+        title=None,
         showgrid=False,
         zeroline=False,
         side="top",
+        range=[min(finais_unicos) - 0.7, max(finais_unicos) + 0.7],
     ),
     yaxis=dict(
         tickvals=andares_unicos,
@@ -333,24 +334,27 @@ fig_map.update_layout(
         title="Andar",
         showgrid=False,
         zeroline=False,
-        autorange="reversed",
+        autorange=True,  # andar 1 na base, maior andar no topo
     ),
     legend=dict(
         orientation="h",
         yanchor="bottom", y=1.06,
         xanchor="left", x=0,
-        font=dict(size=11),
+        font=dict(size=10),
     ),
     clickmode="event+select",
 )
 
-map_event = st.plotly_chart(
-    fig_map,
-    use_container_width=True,
-    on_select="rerun",
-    selection_mode="points",
-    key="mapa_predio",
-)
+col_mapa, col_detalhe = st.columns([3, 2])
+
+with col_mapa:
+    map_event = st.plotly_chart(
+        fig_map,
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="points",
+        key="mapa_predio",
+    )
 
 # ─── Captura de clique no mapa ────────────────────────────────────────────────
 if map_event and getattr(map_event, "selection", None):
@@ -363,9 +367,17 @@ if map_event and getattr(map_event, "selection", None):
 apto_sel: str | None = st.session_state.get("apto_selecionado")
 
 # ─── Painel de detalhes do apartamento ───────────────────────────────────────
-if apto_sel:
-    num_sel = apto_sel.replace("Apartamento", "").strip()
-    with st.expander(f"Apartamento {num_sel} — detalhes", expanded=True):
+with col_detalhe:
+    if not apto_sel:
+        st.markdown(
+            "<div style='color:#aaa;padding:2rem 0;text-align:center;'>"
+            "Clique em um apartamento<br>para ver os detalhes."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        num_sel = apto_sel.replace("Apartamento", "").strip()
+        st.markdown(f"**Apartamento {num_sel}**")
         df_det = load_detalhes_apto(apto_sel)
 
         # guarda nomes reais antes do anon (necessário para o INSERT)
@@ -388,19 +400,16 @@ if apto_sel:
                 meses_rec   = row.get("meses_residente_recente")
 
                 with st.container(border=True):
-                    c_info, c_status = st.columns([3, 1])
-                    with c_info:
-                        st.markdown(f"**{nome_exib}** &nbsp;·&nbsp; _{perfil}_")
-                        st.caption(
-                            f"{_cls_badge(cls_efetiva)}"
-                            + (f" &nbsp;|&nbsp; {media_dias:.1f} dias/mês" if media_dias else "")
-                            + (f" &nbsp;|&nbsp; {meses_rec} meses recentes" if meses_rec else "")
-                        )
-                    with c_status:
-                        if cls_manual:
-                            st.success(f"✔ {cls_manual}", icon=None)
-                        if alerta:
-                            st.warning(alerta)
+                    st.markdown(f"**{nome_exib}** &nbsp;·&nbsp; _{perfil}_")
+                    st.caption(
+                        f"{_cls_badge(cls_efetiva)}"
+                        + (f" &nbsp;|&nbsp; {media_dias:.1f} dias/mês" if media_dias else "")
+                        + (f" &nbsp;|&nbsp; {meses_rec} meses rec." if meses_rec else "")
+                    )
+                    if cls_manual:
+                        st.success(f"✔ {cls_manual}", icon=None)
+                    if alerta:
+                        st.warning(alerta)
 
                     # Formulário de revisão — só no modo real, só para alertas não resolvidos
                     if is_real and alerta and not cls_manual:
