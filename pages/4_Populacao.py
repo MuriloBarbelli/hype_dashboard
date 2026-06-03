@@ -63,7 +63,7 @@ def _build_units() -> tuple[frozenset, frozenset]:
 UNIDADES_RES, UNIDADES_NR = _build_units()
 
 # ─── Queries cacheadas ────────────────────────────────────────────────────────
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_view() -> pd.DataFrame:
     rows = fetch_df("""
         SELECT
