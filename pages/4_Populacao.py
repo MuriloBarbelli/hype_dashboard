@@ -327,7 +327,7 @@ def _freq_html(row: pd.Series, mes_label: str) -> str:
 
 
 def _build_card_html(row: pd.Series, mes_label: str) -> str:
-    nome       = html_lib.escape(str(row["user_name"]))
+    nome       = html_lib.escape(str(row.get("display_name") or row["user_name"]))
     perfis_str = row.get("user_profile") or ""
     cls_ef     = row.get("classificacao_efetiva") or ""
     cls_man    = row.get("classificacao_manual")
@@ -622,13 +622,18 @@ with col_detalhe:
         if df_det.empty:
             st.info("Nenhum registro encontrado para este apartamento.")
         else:
-            # preserva nomes reais antes do anon
+            # preserva nomes reais e detecta duplicatas ANTES do anon
+            # (comparação usa nome real — codinomes seriam diferentes para a mesma pessoa)
             df_det["_nome_real"] = df_det["user_name"]
-            if not is_real:
-                df_det = _apply_anon(df_det, anon_map)
-
-            # detecta e colapsa duplicatas (avisos visíveis nos próprios cards)
             df_det, _ = _detectar_duplicatas(df_det)
+
+            # cria display_name para exibição — só após agrupar duplicatas
+            if is_real:
+                df_det["display_name"] = df_det["user_name"]
+            else:
+                df_det["display_name"] = df_det["user_name"].map(
+                    lambda n: anon_map.get(n, n) if pd.notna(n) else n
+                )
 
             # ── cards como HTML puro dentro de div scrollável ──────────────
             cards_html = "".join(
@@ -646,8 +651,8 @@ with col_detalhe:
                 for _, row in df_det.iterrows():
                     if not (_is_valid(row.get("alerta")) and not _is_valid(row.get("classificacao_manual"))):
                         continue
-                    nome_exib = row["user_name"]
-                    nome_real = row.get("_nome_real") or nome_exib
+                    nome_exib = row.get("display_name") or row["user_name"]
+                    nome_real = row.get("_nome_real") or row["user_name"]
                     form_key  = f"rev_{apto_sel}_{nome_real}"
                     st.markdown(f"**Revisão — {nome_exib}**")
                     with st.form(key=form_key, border=True):
