@@ -124,43 +124,45 @@ def load_evolucao(unidades: frozenset) -> pd.DataFrame:
 
 
 def load_detalhes_apto(unit_str: str) -> pd.DataFrame:
+    # CTE `pessoas`: uma linha por (user_name, user_profile) — preserva duplicatas de perfil
+    # CTE `acessos`: agrega events por user_name apenas — ao fazer LEFT JOIN,
+    #   as duas linhas de Vanessa (Morador e Convidado) recebem os mesmos valores
     rows = fetch_df("""
+        WITH pessoas AS (
+            SELECT
+                user_name, user_profile, classificacao_auto, classificacao_efetiva,
+                alerta, media_dias_por_mes, meses_residente_recente,
+                ultimo_mes_com_entrada, classificacao_manual, confidence,
+                notas_revisao, total_meses
+            FROM vw_resident_classification
+            WHERE unit = %(unit)s
+        ),
+        acessos AS (
+            SELECT
+                user_name,
+                COUNT(DISTINCT DATE(event_timestamp)) FILTER (
+                    WHERE DATE_TRUNC('month', event_timestamp) =
+                          DATE_TRUNC('month', NOW() - INTERVAL '1 month')
+                ) AS dias_ultimo_mes,
+                MAX(DATE(event_timestamp)) AS data_ultimo_acesso
+            FROM public.events
+            WHERE unit = %(unit)s
+              AND event_type_code IN (701, 708, 311, 183)
+              AND access_name IN (
+                  '6062 Portão Pedestre Interno',
+                  '6064 Hall Residencial',
+                  '6061 Portão Pedestre Externo',
+                  '6063 Hall NR'
+              )
+            GROUP BY user_name
+        )
         SELECT
-            v.user_name, v.user_profile, v.classificacao_auto, v.classificacao_efetiva,
-            v.alerta, v.media_dias_por_mes, v.meses_residente_recente,
-            v.ultimo_mes_com_entrada, v.classificacao_manual, v.confidence,
-            v.notas_revisao, v.total_meses,
-            (
-                SELECT COUNT(DISTINCT DATE(e2.event_timestamp))
-                FROM public.events e2
-                WHERE e2.user_name = v.user_name
-                  AND e2.unit = %(unit)s
-                  AND e2.event_type_code IN (701, 708, 311, 183)
-                  AND e2.access_name IN (
-                      '6062 Portão Pedestre Interno',
-                      '6064 Hall Residencial',
-                      '6061 Portão Pedestre Externo',
-                      '6063 Hall NR'
-                  )
-                  AND DATE_TRUNC('month', e2.event_timestamp) =
-                      DATE_TRUNC('month', NOW() - INTERVAL '1 month')
-            ) AS dias_ultimo_mes,
-            (
-                SELECT MAX(DATE(e3.event_timestamp))
-                FROM public.events e3
-                WHERE e3.user_name = v.user_name
-                  AND e3.unit = %(unit)s
-                  AND e3.event_type_code IN (701, 708, 311, 183)
-                  AND e3.access_name IN (
-                      '6062 Portão Pedestre Interno',
-                      '6064 Hall Residencial',
-                      '6061 Portão Pedestre Externo',
-                      '6063 Hall NR'
-                  )
-            ) AS data_ultimo_acesso
-        FROM vw_resident_classification v
-        WHERE v.unit = %(unit)s
-        ORDER BY v.media_dias_por_mes DESC NULLS LAST
+            p.*,
+            COALESCE(a.dias_ultimo_mes, 0) AS dias_ultimo_mes,
+            a.data_ultimo_acesso
+        FROM pessoas p
+        LEFT JOIN acessos a ON a.user_name = p.user_name
+        ORDER BY p.media_dias_por_mes DESC NULLS LAST
     """, {"unit": unit_str})
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
@@ -229,11 +231,8 @@ def _detectar_duplicatas(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
             if j in usado:
                 continue
             nj = df.at[j, "_norm"]
-            # (a) mesmo nome, perfil diferente
+            # mesmo nome exato com perfil diferente → duplicata certa
             if ni == nj and df.at[i, "user_profile"] != df.at[j, "user_profile"]:
-                grupo.append(j)
-            # (b) um nome contém o outro (min 4 chars para evitar falsos positivos)
-            elif len(ni) >= 4 and len(nj) >= 4 and (ni in nj or nj in ni):
                 grupo.append(j)
         grupos.append(grupo)
         usado.update(grupo)
