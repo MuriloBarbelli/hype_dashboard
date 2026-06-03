@@ -211,6 +211,18 @@ def _profile_badge(profile: str | None) -> str:
     )
 
 
+_SORT_COLS = ["meses_residente_recente", "dias_ultimo_mes", "media_dias_por_mes", "data_ultimo_acesso"]
+_SORT_ASC  = [False, False, False, False]
+
+def _sort_pessoas(df: pd.DataFrame) -> pd.DataFrame:
+    """Ordena cards por relevância: recência > mês anterior > média > último acesso."""
+    cols = [c for c in _SORT_COLS if c in df.columns]
+    asc  = _SORT_ASC[: len(cols)]
+    if not cols:
+        return df
+    return df.sort_values(cols, ascending=asc, na_position="last").reset_index(drop=True)
+
+
 def _detectar_duplicatas(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     """Colapsa linhas que provavelmente são a mesma pessoa física."""
     if df.empty:
@@ -289,7 +301,7 @@ def _detectar_duplicatas(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         r["_is_dup"]                 = True
         linhas.append(r)
 
-    return pd.DataFrame(linhas).drop(columns=["_norm"]), avisos
+    return _sort_pessoas(pd.DataFrame(linhas).drop(columns=["_norm"])), avisos
 
 
 def _is_valid(v) -> bool:
@@ -642,6 +654,7 @@ with col_detalhe:
             # preserva nomes reais e detecta duplicatas ANTES do anon
             # (comparação usa nome real — codinomes seriam diferentes para a mesma pessoa)
             df_det["_nome_real"] = df_det["user_name"]
+            df_det = _sort_pessoas(df_det)
             df_det, _ = _detectar_duplicatas(df_det)
 
             # cria display_name para exibição — só após agrupar duplicatas
