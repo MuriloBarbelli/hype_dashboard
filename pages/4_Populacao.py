@@ -123,6 +123,7 @@ def load_evolucao(unidades: frozenset) -> pd.DataFrame:
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def load_detalhes_apto(unit_str: str) -> pd.DataFrame:
     # CTE `pessoas`: uma linha por (user_name, user_profile) — preserva duplicatas de perfil
     # CTE `acessos`: agrega events por user_name apenas — ao fazer LEFT JOIN,
