@@ -247,14 +247,28 @@ def _detectar_duplicatas(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
             linhas.append(r)
             continue
 
-        perfis = ", ".join(p for p in rows["user_profile"].dropna().unique() if p)
+        # perfis: todos concatenados com " · "
+        perfis = " · ".join(p for p in rows["user_profile"].dropna().unique() if p)
         nome_principal = rows["user_name"].iloc[0]
-        media = float(rows["media_dias_por_mes"].fillna(0).sum())
-        alerta    = next((v for v in rows["alerta"] if pd.notna(v)), None)
-        cls_ef    = next((v for v in rows["classificacao_efetiva"] if pd.notna(v)), "")
-        cls_man   = next((v for v in rows["classificacao_manual"] if pd.notna(v)), None)
-        meses_rec = rows["meses_residente_recente"].max()
         nome_real = rows["_nome_real"].iloc[0] if "_nome_real" in rows.columns else nome_principal
+
+        # métricas: SOMA (cadastros são complementares, não duplicados)
+        media_soma    = float(rows["media_dias_por_mes"].fillna(0).sum())
+        dias_ult_soma = int(rows["dias_ultimo_mes"].fillna(0).sum()) if "dias_ultimo_mes" in rows.columns else 0
+        data_ult_max  = rows["data_ultimo_acesso"].dropna().max() if "data_ultimo_acesso" in rows.columns else None
+        meses_res_max = rows["meses_residente_recente"].fillna(0).max()
+
+        # classificação recalculada com base na média somada
+        if media_soma >= 13 and meses_res_max >= 1:
+            cls_recalc = "residente_ativo"
+        elif media_soma >= 6:
+            cls_recalc = "presenca_regular"
+        else:
+            cls_recalc = "visitante"
+
+        # alerta: qualquer alerta não nulo do grupo
+        alerta  = next((v for v in rows["alerta"] if pd.notna(v) and str(v).strip().lower() not in ("", "nan")), None)
+        cls_man = next((v for v in rows["classificacao_manual"] if pd.notna(v)), None)
 
         avisos.append(
             f"⚠️ Possível cadastro duplicado: **{nome_principal}** aparece com "
@@ -263,11 +277,14 @@ def _detectar_duplicatas(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
         r = rows.iloc[0].to_dict()
         r["user_profile"]            = perfis
-        r["media_dias_por_mes"]      = media if media > 0 else None
+        r["media_dias_por_mes"]      = media_soma if media_soma > 0 else None
+        r["dias_ultimo_mes"]         = dias_ult_soma
+        r["data_ultimo_acesso"]      = data_ult_max
+        r["meses_residente_recente"] = meses_res_max
+        r["classificacao_efetiva"]   = cls_recalc
+        r["classificacao_auto"]      = cls_recalc
         r["alerta"]                  = alerta
-        r["classificacao_efetiva"]   = cls_ef
         r["classificacao_manual"]    = cls_man
-        r["meses_residente_recente"] = meses_rec
         r["_nome_real"]              = nome_real
         r["_is_dup"]                 = True
         linhas.append(r)
