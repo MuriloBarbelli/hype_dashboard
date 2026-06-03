@@ -112,6 +112,21 @@ def main():
     mapped_reals = {r[0] for r in rows_map if r[0]}
     used_anons   = {r[2] for r in rows_map if r[2]}
 
+    # norms de TODOS os nomes reais do sistema (inclui perfis funcionais)
+    # codinomes não podem colidir com nenhum nome real, independente de perfil
+    conn = _get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT user_name FROM public.events
+                WHERE user_name IS NOT NULL AND btrim(user_name) != ''
+            """)
+            all_real_names = {row[0].strip() for row in cur.fetchall() if row[0].strip()}
+    finally:
+        conn.close()
+
+    real_norms = {norm_text(n) for n in all_real_names} | {norm_text(n) for n in mapped_reals}
+
     # 3) quais ainda não foram mapeados — pula norms bloqueadas pelo trigger
     missing = [
         (rn, norm_text(rn))
@@ -133,7 +148,8 @@ def main():
 
         for _ in range(300):
             candidate = make_name(rng)
-            if candidate not in used_anons:
+            # rejeita se já é codinome de outra pessoa OU se colide com algum nome real
+            if candidate not in used_anons and norm_text(candidate) not in real_norms:
                 used_anons.add(candidate)
                 inserts.append({
                     "user_name_real": real,
@@ -143,7 +159,10 @@ def main():
                 break
         else:
             # fallback: sufixo numérico para garantir unicidade
-            candidate = make_name(rng) + f" {rng.randint(10, 99)}"
+            for suffix in range(10, 200):
+                candidate = make_name(rng) + f" {suffix}"
+                if candidate not in used_anons and norm_text(candidate) not in real_norms:
+                    break
             used_anons.add(candidate)
             inserts.append({
                 "user_name_real": real,
