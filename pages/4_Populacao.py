@@ -147,7 +147,11 @@ def load_detalhes_apto(unit_str: str) -> pd.DataFrame:
                 ) AS dias_ultimo_mes,
                 MAX(DATE(event_timestamp)) AS data_ultimo_acesso
             FROM public.events
-            WHERE unit = %(unit)s
+            WHERE user_name IN (SELECT user_name FROM pessoas)
+              AND (
+                  unit = %(unit)s
+                  OR unit = 'Apartamento 000'
+              )
               AND event_type_code IN (701, 708, 311, 183)
               AND access_name IN (
                   '6062 Portão Pedestre Interno',
