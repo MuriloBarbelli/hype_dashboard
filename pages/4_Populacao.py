@@ -144,7 +144,20 @@ def load_detalhes_apto(unit_str: str) -> pd.DataFrame:
                   )
                   AND DATE_TRUNC('month', e2.event_timestamp) =
                       DATE_TRUNC('month', NOW() - INTERVAL '1 month')
-            ) AS dias_ultimo_mes
+            ) AS dias_ultimo_mes,
+            (
+                SELECT MAX(DATE(e3.event_timestamp))
+                FROM public.events e3
+                WHERE e3.user_name = v.user_name
+                  AND e3.unit = %(unit)s
+                  AND e3.event_type_code IN (701, 708, 311, 183)
+                  AND e3.access_name IN (
+                      '6062 Portão Pedestre Interno',
+                      '6064 Hall Residencial',
+                      '6061 Portão Pedestre Externo',
+                      '6063 Hall NR'
+                  )
+            ) AS data_ultimo_acesso
         FROM vw_resident_classification v
         WHERE v.unit = %(unit)s
         ORDER BY v.media_dias_por_mes DESC NULLS LAST
@@ -262,6 +275,18 @@ def _detectar_duplicatas(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     return pd.DataFrame(linhas).drop(columns=["_norm"]), avisos
 
 
+def _is_valid(v) -> bool:
+    """True se o valor não é None, NaN, ou string vazia/nan."""
+    if v is None:
+        return False
+    try:
+        if pd.isna(v):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return str(v).strip().lower() not in ("", "nan", "none")
+
+
 def _fmt_mes(d) -> str:
     try:
         return f"{MESES_PT[d.month]}/{str(d.year)[2:]}"
@@ -269,32 +294,45 @@ def _fmt_mes(d) -> str:
         return str(d) if d else "?"
 
 
+def _fmt_data(d) -> str:
+    """Formata date como DD/MM/AA."""
+    try:
+        return d.strftime("%d/%m/%y")
+    except (AttributeError, TypeError):
+        return str(d) if d else ""
+
+
 def _freq_html(row: pd.Series, mes_label: str) -> str:
-    total_meses  = int(row.get("total_meses") or 0)
-    media        = row.get("media_dias_por_mes")
-    dias_ultimo  = int(row.get("dias_ultimo_mes") or 0)
-    ultimo_mes   = row.get("ultimo_mes_com_entrada")
+    total_meses   = int(row.get("total_meses") or 0)
+    media         = row.get("media_dias_por_mes")
+    dias_ultimo   = int(row.get("dias_ultimo_mes") or 0)
+    data_acesso   = row.get("data_ultimo_acesso")
+    acesso_str    = f"último acesso: {_fmt_data(data_acesso)}" if data_acesso else ""
 
     if total_meses == 1 and not dias_ultimo:
-        mes_str = _fmt_mes(ultimo_mes)
-        return f"Visita única em {mes_str}"
+        parts = ["Visita única"]
+        if acesso_str:
+            parts.append(acesso_str)
+        return " &nbsp;·&nbsp; ".join(parts)
 
     parts: list[str] = []
-    if media is not None:
+    if _is_valid(media):
         sufixo = " (visita única)" if total_meses == 1 else " (média)"
-        parts.append(f"{media:.1f} dias/mês{sufixo}")
+        parts.append(f"{float(media):.1f} dias/mês{sufixo}")
     if dias_ultimo:
         parts.append(f"{dias_ultimo} dias em {mes_label}")
+    if acesso_str:
+        parts.append(acesso_str)
     return " &nbsp;·&nbsp; ".join(parts) if parts else "sem dados"
 
 
 def _build_card_html(row: pd.Series, mes_label: str) -> str:
-    nome        = html_lib.escape(str(row["user_name"]))
-    perfis_str  = row.get("user_profile") or ""
-    cls_ef      = row.get("classificacao_efetiva") or ""
-    cls_man     = row.get("classificacao_manual")
-    alerta      = row.get("alerta")
-    is_dup      = row.get("_is_dup", False)
+    nome       = html_lib.escape(str(row["user_name"]))
+    perfis_str = row.get("user_profile") or ""
+    cls_ef     = row.get("classificacao_efetiva") or ""
+    cls_man    = row.get("classificacao_manual")
+    alerta     = row.get("alerta")
+    is_dup     = row.get("_is_dup", False)
 
     # badges de perfil
     badges = " ".join(
@@ -308,14 +346,12 @@ def _build_card_html(row: pd.Series, mes_label: str) -> str:
 
     # linha de frequência
     freq = _freq_html(row, mes_label)
-
-    # classificação + frequência
     cls_text = html_lib.escape(_cls_badge(cls_ef))
     info_line = f"{cls_text} &nbsp;·&nbsp; {freq}"
 
-    # blocos opcionais
+    # blocos opcionais — só renderiza se valor real (não nan)
     alerta_block = ""
-    if alerta:
+    if _is_valid(alerta):
         alerta_text = html_lib.escape(str(alerta))
         alerta_block = (
             f"<div style='margin-top:6px;padding:4px 10px;background:#FFF3CD;"
@@ -323,7 +359,7 @@ def _build_card_html(row: pd.Series, mes_label: str) -> str:
             f"font-size:12px;color:#7a5200;'>⚠ {alerta_text}</div>"
         )
     cls_man_block = ""
-    if cls_man:
+    if _is_valid(cls_man):
         cls_man_text = html_lib.escape(str(cls_man))
         cls_man_block = (
             f"<div style='margin-top:6px;padding:4px 10px;background:#E8F5E9;"
@@ -591,11 +627,8 @@ with col_detalhe:
             if not is_real:
                 df_det = _apply_anon(df_det, anon_map)
 
-            # detecta e colapsa duplicatas
-            df_det, dup_avisos = _detectar_duplicatas(df_det)
-
-            for aviso in dup_avisos:
-                st.warning(aviso)
+            # detecta e colapsa duplicatas (avisos visíveis nos próprios cards)
+            df_det, _ = _detectar_duplicatas(df_det)
 
             # ── cards como HTML puro dentro de div scrollável ──────────────
             cards_html = "".join(
@@ -611,7 +644,7 @@ with col_detalhe:
             # ── formulários de revisão abaixo do scroll (só modo real) ─────
             if is_real:
                 for _, row in df_det.iterrows():
-                    if not (row.get("alerta") and not row.get("classificacao_manual")):
+                    if not (_is_valid(row.get("alerta")) and not _is_valid(row.get("classificacao_manual"))):
                         continue
                     nome_exib = row["user_name"]
                     nome_real = row.get("_nome_real") or nome_exib
