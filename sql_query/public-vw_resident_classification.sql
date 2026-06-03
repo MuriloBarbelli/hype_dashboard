@@ -1,22 +1,52 @@
 CREATE OR REPLACE VIEW public.vw_resident_classification AS
-WITH entradas AS (
-    SELECT
-        events.user_name,
-        events.user_profile,
-        events.unit,
-        date(events.event_timestamp)                          AS dia,
-        date_trunc('month', events.event_timestamp)::date     AS mes
+WITH filtro_base AS (
+    -- eventos válidos (excluindo Ap. 000 — tratado separadamente)
+    SELECT user_name, user_profile, unit,
+           date(event_timestamp)                      AS dia,
+           date_trunc('month', event_timestamp)::date AS mes
     FROM events
-    WHERE events.event_type_code = ANY(ARRAY[701, 708, 311, 183])
-      AND events.access_name = ANY(ARRAY[
+    WHERE event_type_code = ANY(ARRAY[701, 708, 311, 183])
+      AND access_name = ANY(ARRAY[
           '6062 Portão Pedestre Interno',
           '6064 Hall Residencial',
           '6061 Portão Pedestre Externo',
           '6063 Hall NR'
       ])
-      AND events.user_name IS NOT NULL AND events.user_name <> ''
-      AND events.unit      IS NOT NULL AND events.unit      <> ''
-      AND events.unit NOT LIKE '%999%'
+      AND user_name IS NOT NULL AND user_name <> ''
+      AND unit      IS NOT NULL AND unit      <> ''
+      AND unit NOT LIKE '%999%'
+      AND unit <> 'Apartamento 000'
+),
+-- unidades residenciais de cada pessoa (qualquer unidade em que apareceu)
+unidades_residenciais AS (
+    SELECT DISTINCT user_name, unit
+    FROM filtro_base
+),
+-- eventos do Ap. 000 expandidos para cada unidade residencial da pessoa
+-- (pessoas como Síndico/Morador registram entradas no 000 mas moram em unidade real)
+eventos_000 AS (
+    SELECT
+        e.user_name,
+        e.user_profile,
+        ur.unit,                                              -- atribuir à unid. residencial
+        date(e.event_timestamp)                      AS dia,
+        date_trunc('month', e.event_timestamp)::date AS mes
+    FROM events e
+    JOIN unidades_residenciais ur ON ur.user_name = e.user_name
+    WHERE e.event_type_code = ANY(ARRAY[701, 708, 311, 183])
+      AND e.access_name = ANY(ARRAY[
+          '6062 Portão Pedestre Interno',
+          '6064 Hall Residencial',
+          '6061 Portão Pedestre Externo',
+          '6063 Hall NR'
+      ])
+      AND e.user_name IS NOT NULL AND e.user_name <> ''
+      AND e.unit = 'Apartamento 000'
+),
+entradas AS (
+    SELECT * FROM filtro_base
+    UNION ALL
+    SELECT * FROM eventos_000
 ),
 -- perfis únicos de cada pessoa na unidade, concatenados
 perfis_por_pessoa AS (
@@ -57,7 +87,6 @@ meses_calendario AS (
     WHERE mes >= date_trunc('month', now() - INTERVAL '3 months')::date
       AND mes <  date_trunc('month', now())::date
 ),
--- recente: uma linha por (user_name, unit) — presenca_mensal já tem 1 linha/mês
 recente AS (
     SELECT
         r.user_name,
@@ -112,7 +141,6 @@ classificacao AS (
                  THEN 'presenca_regular'
             ELSE 'visitante'
         END AS classificacao_auto,
-        -- alertas: LIKE para suportar perfis concatenados (ex: 'Morador · Convidado')
         CASE
             WHEN r.user_profile LIKE '%Convidado%'
                  AND coalesce(rc.meses_residente_recente, 0) >= 1
